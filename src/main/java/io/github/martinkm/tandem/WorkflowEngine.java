@@ -24,6 +24,22 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * is decoded from the store. Steps without one are executed again, because
  * Tandem cannot know whether repeating them is safe. That distinction is the
  * whole durability model, and it is deliberately explicit rather than inferred.
+ *
+ * <h2>Steps left in doubt</h2>
+ *
+ * <p>{@link EventType#STEP_STARTED} is written to the store before the step
+ * runs, so it is an intent record: the log says a step was about to happen even
+ * if the process dies inside it. A resume that finds a recorded step with a
+ * started event, no outcome event and no saved output cannot tell whether the
+ * side effect happened. It stops there with a {@link StepInDoubtException}
+ * rather than repeating the step, and waits for {@link #confirmCompleted} or
+ * {@link #confirmNotCompleted}.
+ *
+ * <p>This narrows the window rather than closing it. Recording an intent and
+ * doing the work are two writes to two systems, and without a transaction
+ * spanning both there is no instant at which they happen together. What Tandem
+ * guarantees is that the ambiguity is detected and surfaced instead of being
+ * resolved by silently running the step a second time.
  */
 public final class WorkflowEngine {
 
@@ -67,7 +83,11 @@ public final class WorkflowEngine {
         Objects.requireNonNull(runId, "runId");
 
         List<WorkflowEvent> collected = new ArrayList<>();
-        boolean resuming = !store.eventsFor(runId).isEmpty();
+        // Read once and keep it. The events this run is about to write must not
+        // count as history, or a step would look started by an earlier run the
+        // moment it starts in this one.
+        List<WorkflowEvent> history = store.eventsFor(runId);
+        boolean resuming = !history.isEmpty();
 
         emit(
                 collected,
@@ -84,6 +104,13 @@ public final class WorkflowEngine {
                     emit(collected, event(runId, workflow, definition.name, EventType.STEP_REPLAYED, 0, ""));
                     completed.add(new Completed(definition, current));
                     continue;
+                }
+                // No output, but the log says an earlier run was inside this
+                // step when it stopped. Only steps the caller declared
+                // replayable get this treatment: a step without a codec was
+                // declared safe to repeat.
+                if (startedAndUnsettled(history, definition.name)) {
+                    return refuse(collected, workflow, runId, definition.name);
                 }
             }
 
@@ -102,9 +129,6 @@ public final class WorkflowEngine {
                 return RunResult.failed(runId, attempted.failure, collected);
             }
 
-            if (definition.replayable()) {
-                store.saveOutput(runId, definition.name, definition.codec.encode(attempted.output));
-            }
             current = attempted.output;
             completed.add(new Completed(definition, current));
         }
@@ -114,6 +138,42 @@ public final class WorkflowEngine {
         @SuppressWarnings("unchecked")
         O output = (O) current;
         return RunResult.succeeded(runId, output, collected);
+    }
+
+    /**
+     * Settle a step left in doubt by saying its side effect did happen, and
+     * recording {@code output} as what it produced. The next resume replays that
+     * value rather than running the step.
+     *
+     * <p>Call it once you have looked at the system the step talked to and found
+     * the work done: the charge on the account, the message on the queue. Tandem
+     * cannot look for you, which is the whole reason the run stopped.
+     *
+     * @param <T> the step's output type
+     */
+    public <T> void confirmCompleted(String runId, String stepName, T output, Codec<T> codec) {
+        Objects.requireNonNull(runId, "runId");
+        Objects.requireNonNull(stepName, "stepName");
+        Objects.requireNonNull(codec, "codec");
+
+        // Output first, then the event that says it is safe to trust, for the
+        // same reason a step attempt does it in that order.
+        store.saveOutput(runId, stepName, codec.encode(output));
+        emit(settlement(runId, stepName, EventType.STEP_SUCCEEDED));
+    }
+
+    /**
+     * Settle a step left in doubt by saying its side effect did not happen, so
+     * the next resume runs the step again.
+     *
+     * <p>Recorded as a failed step, because that is what it was: it started and
+     * did not complete.
+     */
+    public void confirmNotCompleted(String runId, String stepName) {
+        Objects.requireNonNull(runId, "runId");
+        Objects.requireNonNull(stepName, "stepName");
+
+        emit(settlement(runId, stepName, EventType.STEP_FAILED));
     }
 
     /** Runs one step, retrying per its policy. */
@@ -145,12 +205,9 @@ public final class WorkflowEngine {
                     new StepContext(runId, workflow.name(), definition.name, attempt, resuming);
             emit(collected, event(runId, workflow, definition.name, EventType.STEP_STARTED, attempt, ""));
 
+            Object output;
             try {
-                Object output = definition.step.run(input, context);
-                emit(
-                        collected,
-                        event(runId, workflow, definition.name, EventType.STEP_SUCCEEDED, attempt, ""));
-                return Attempted.succeeded(output);
+                output = definition.step.run(input, context);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 emit(
@@ -175,10 +232,68 @@ public final class WorkflowEngine {
                                 willRetry ? EventType.STEP_RETRYING : EventType.STEP_FAILED,
                                 attempt,
                                 describe(thrown)));
+                continue;
             }
+
+            // The output is recorded before the step is called succeeded, and
+            // outside the catch above on purpose. Before, because a crash
+            // between the two must leave the run replayable rather than in
+            // doubt. Outside, because a store failure here is not a step
+            // failure: retrying it would run the side effect a second time.
+            if (definition.replayable()) {
+                store.saveOutput(runId, definition.name, definition.codec.encode(output));
+            }
+            emit(
+                    collected,
+                    event(runId, workflow, definition.name, EventType.STEP_SUCCEEDED, attempt, ""));
+            return Attempted.succeeded(output);
         }
 
         return Attempted.failed(last);
+    }
+
+    /**
+     * Whether an earlier run wrote a started event for this step and nothing
+     * that says how it ended.
+     *
+     * <p>Every attempt writes {@link EventType#STEP_STARTED} before running the
+     * step and exactly one of succeeded, retrying or failed after it. A started
+     * event with no partner means the process stopped inside the step body, so
+     * whether the side effect happened is not knowable from the log. Events that
+     * say nothing about an attempt's outcome, such as a previous refusal, are
+     * ignored, or a run would talk itself out of its own doubt.
+     */
+    private static boolean startedAndUnsettled(List<WorkflowEvent> history, String stepName) {
+        int started = 0;
+        int settled = 0;
+        for (WorkflowEvent past : history) {
+            if (!past.stepName().equals(stepName)) {
+                continue;
+            }
+            switch (past.type()) {
+                case STEP_STARTED -> started++;
+                case STEP_SUCCEEDED, STEP_RETRYING, STEP_FAILED -> settled++;
+                default -> { }
+            }
+        }
+        return started > settled;
+    }
+
+    /**
+     * Ends a resume at a step that may or may not have run.
+     *
+     * <p>Compensations deliberately do not run. They would undo steps whose
+     * recorded outputs stay in the store, so a later resume would replay values
+     * that no longer stand. A run stopped here is waiting for a decision, not
+     * being abandoned.
+     */
+    private <O> RunResult<O> refuse(
+            List<WorkflowEvent> collected, Workflow<?, ?> workflow, String runId, String stepName) {
+
+        StepInDoubtException failure = new StepInDoubtException(runId, stepName);
+        emit(collected, event(runId, workflow, stepName, EventType.STEP_IN_DOUBT, 0, failure.getMessage()));
+        emit(collected, event(runId, workflow, stepName, EventType.RUN_FAILED, 0, String.valueOf(failure)));
+        return RunResult.failed(runId, failure, collected);
     }
 
     /** Undoes completed steps, most recent first. */
@@ -232,6 +347,15 @@ public final class WorkflowEngine {
     }
 
     /**
+     * The outcome event a confirmation writes. It belongs to no run of the
+     * engine, so there is no workflow name or attempt to put on it.
+     */
+    private static WorkflowEvent settlement(String runId, String stepName, EventType type) {
+        return new WorkflowEvent(
+                runId, "", stepName, type, 0, Instant.now(), "confirmed out of band");
+    }
+
+    /**
      * Records an event and tells the listeners.
      *
      * <p>A store failure propagates: durability is why a store was chosen, so
@@ -240,6 +364,11 @@ public final class WorkflowEngine {
      */
     private void emit(List<WorkflowEvent> collected, WorkflowEvent event) {
         collected.add(event);
+        emit(event);
+    }
+
+    /** The same, for events that belong to no run in progress. */
+    private void emit(WorkflowEvent event) {
         store.append(event);
         for (WorkflowListener listener : listeners) {
             try {

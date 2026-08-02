@@ -13,11 +13,15 @@ Three answers are possible, and only one of them is right for any given step:
 1. Charge again. Correct for a pure computation, catastrophic for a payment.
 2. Skip it and carry on with the recorded result. Correct for the payment,
    wrong if the charge never actually completed.
-3. Refuse to resume. Safe, useless.
+3. Refuse to resume. Safe, and useless as a general policy.
 
 Tandem cannot tell which of your steps is which. Nothing can, from the outside:
 a method that returns a `String` looks identical whether it hashed something or
 moved money. So Tandem asks you, once, per step.
+
+The third answer is not useless in one narrow case: when the log itself cannot
+say whether the charge completed. Tandem refuses there and only there, which is
+[the section on dying mid-step](#when-the-process-dies-inside-a-step).
 
 ## How you say it
 
@@ -59,6 +63,78 @@ if it needs to.
 
 A run id you have never used starts fresh. `engine.run(workflow, input)` without
 one generates a UUID, so ordinary runs are never accidentally resumed.
+
+## When the process dies inside a step
+
+Running a step and recording its output are two writes, to the system the step
+talks to and to your store. They cannot be made one write without a transaction
+spanning both, which a library sitting inside your JVM does not have. So there
+is an instant where the card has been charged and nothing has recorded it.
+
+What Tandem does is write the intent before the work, not after it:
+
+```
+STEP_STARTED   charge     <- in the store before the step is called
+   ...the step runs, the card is charged...
+saveOutput     charge     <- the recorded output
+STEP_SUCCEEDED charge     <- only once the output is safely down
+```
+
+A resume reads the log. Three shapes are possible for a recorded step:
+
+| What the log holds | What resume does |
+| :-- | :-- |
+| A saved output | Replays it. The step does not run. |
+| No started event | Runs the step. Nothing happened yet. |
+| Started events that all have an outcome, no output | Runs the step. The last attempt is known to have failed, which is the same thing a retry within one run does. |
+| A started event with no outcome, no output | Stops. |
+
+That third row is the crash window, and stopping there is the whole point. The
+run fails with a `StepInDoubtException` carrying the run id and the step name,
+and emits `STEP_IN_DOUBT`. Compensations do not run: they would undo steps whose
+recorded outputs are still in the store, so a later resume would replay values
+that no longer stand. The run is waiting for a decision, not being abandoned.
+
+### Settling it
+
+Look at the system the step talked to, then tell the engine what you found:
+
+```java
+RunResult<Receipt> result = engine.run(checkout, order, "order-4417");
+
+if (result.failure() instanceof StepInDoubtException doubt) {
+    if (payments.chargeExistsFor(order)) {
+        engine.confirmCompleted(doubt.runId(), doubt.stepName(), chargeId, Codec.ofString());
+    } else {
+        engine.confirmNotCompleted(doubt.runId(), doubt.stepName());
+    }
+    result = engine.run(checkout, order, "order-4417");
+}
+```
+
+A run stopped this way is a failed `RunResult` like any other, not a throw, so
+the check is on `failure()`.
+
+`confirmCompleted` records the output you supply, so the next resume replays it.
+`confirmNotCompleted` records the step as failed, which is what it was, so the
+next resume runs it again. Both write to the store, so the decision survives a
+restart and shows up in the audit trail as `confirmed out of band`.
+
+### The residual guarantee, stated exactly
+
+- A step with a `Codec` is **never repeated by a resume** unless you called
+  `confirmNotCompleted` for it.
+- An outcome the log cannot settle is **surfaced, not guessed**.
+- Detection is only as good as the store's durability at the moment
+  `STEP_STARTED` is written. `FileStore` does not fsync, so a power loss, as
+  opposed to a process crash, can lose that line and with it the doubt. A store
+  over a database that commits the event synchronously does not have that gap.
+- A step **without** a `Codec` is repeated after a crash with no questions
+  asked, because declaring it without one is how you said that was fine.
+- None of this makes a non-idempotent remote call safe on its own. It makes the
+  ambiguity visible. An idempotency key on the call itself is still the right
+  thing to do, and Tandem gives you a stable one: `StepContext.runId()` plus
+  `stepName()`.
 
 ## Codecs
 
@@ -126,6 +202,11 @@ break the process it watches.
 Resuming is manual. Nothing scans for interrupted runs and restarts them, so
 knowing that `order-4417` needs resuming is your application's job, from your
 own records or by listing runs in your store.
+
+Settling a step left in doubt is manual too. Tandem cannot query your payment
+provider, so a run stopped by `StepInDoubtException` stays stopped until
+something calls `confirmCompleted` or `confirmNotCompleted`. Making that
+automatic would mean guessing, which is the thing the stop exists to avoid.
 
 There is also no protection against a definition changing between runs. Add a
 step in the middle, resume an old run, and the recorded outputs are matched by

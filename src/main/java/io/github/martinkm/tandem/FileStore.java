@@ -63,7 +63,7 @@ public final class FileStore implements WorkflowStore {
 
     @Override
     public List<WorkflowEvent> eventsFor(String runId) {
-        Path file = root.resolve(runId).resolve("events.jsonl");
+        Path file = root.resolve(safeName(runId)).resolve("events.jsonl");
         if (!Files.exists(file)) {
             return List.of();
         }
@@ -104,7 +104,10 @@ public final class FileStore implements WorkflowStore {
 
     @Override
     public Optional<String> loadOutput(String runId, String stepName) {
-        Path file = root.resolve(runId).resolve("steps").resolve(safeName(stepName) + ".out");
+        Path file =
+                root.resolve(safeName(runId))
+                        .resolve("steps")
+                        .resolve(safeName(stepName) + ".out");
         if (!Files.exists(file)) {
             return Optional.empty();
         }
@@ -128,6 +131,20 @@ public final class FileStore implements WorkflowStore {
     /**
      * Step and run names become file names, so anything that could escape the
      * directory or upset a filesystem is replaced.
+     *
+     * <p>Every path is built through here, reads included. It used to sanitise
+     * on the way in and not on the way out, so a run id holding anything
+     * outside the allowed set wrote its events to one directory and read them
+     * back from another. {@code eventsFor} returned nothing, the engine decided
+     * the run was fresh, and every recorded step ran a second time, which is
+     * the exact failure durability exists to prevent.
+     *
+     * <p>Replacement alone is not injective: {@code "a/b"} and {@code "a_b"}
+     * both flatten to {@code "a_b"}, and two runs sharing a directory would
+     * interleave their event logs and resume from each other. Anything that had
+     * to be replaced therefore carries a suffix derived from the original, so
+     * distinct ids stay distinct. Ids that need no replacement, which is nearly
+     * all of them, are untouched and stay readable on disk.
      */
     private static String safeName(String name) {
         StringBuilder out = new StringBuilder(name.length());
@@ -142,8 +159,23 @@ public final class FileStore implements WorkflowStore {
                             || c == '.';
             out.append(allowed ? c : '_');
         }
-        String result = out.toString();
         // "." and ".." would resolve to a directory rather than a file.
-        return result.replace("..", "__").isBlank() ? "unnamed" : result.replace("..", "__");
+        String result = out.toString().replace("..", "__");
+        if (result.isBlank()) {
+            result = "unnamed";
+        }
+        return result.equals(name) ? result : result + "-" + disambiguator(name);
+    }
+
+    /**
+     * A short, stable tag for an original name, so two names that sanitise to
+     * the same characters do not end up in the same directory.
+     *
+     * <p>{@link String#hashCode} rather than a digest: this only has to separate
+     * names, not resist anyone choosing them, and a digest would mean a
+     * MessageDigest lookup every time a path is built.
+     */
+    private static String disambiguator(String name) {
+        return Integer.toHexString(name.hashCode() & 0xFFFFFFF);
     }
 }

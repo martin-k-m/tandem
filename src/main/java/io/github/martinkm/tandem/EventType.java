@@ -10,6 +10,11 @@ public enum EventType {
     STEP_REPLAYED,
     STEP_FAILED,
     STEP_RETRYING,
+    /**
+     * A resume found a recorded step that an earlier run started and never
+     * finished recording, so the run stopped rather than guessing.
+     */
+    STEP_IN_DOUBT,
     STEP_COMPENSATED,
     RUN_SUCCEEDED,
     RUN_FAILED

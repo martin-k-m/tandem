@@ -54,6 +54,11 @@ src/main/java/io/github/martinkm/tandem/
 
 - **A codec is the only thing that makes a step replayable.** Never infer it.
   Guessing means either re-charging a card or skipping work that never happened.
+- **The write order inside a step attempt is the durability fix**, not
+  incidental: `STEP_STARTED` before the step runs, the output before
+  `STEP_SUCCEEDED`. A resume reads the log and stops at a recorded step that was
+  started with no outcome and no output. Move either write and the double-charge
+  window reopens; there are tests for both halves.
 - **Compensations run in reverse and keep going** when one throws. Stopping
   leaves more undone than continuing.
 - **Store failures propagate, listener failures do not.** Durability is why a
@@ -62,8 +67,13 @@ src/main/java/io/github/martinkm/tandem/
   Swallowing it strands whoever asked the thread to stop.
 - **Step names key the recorded outputs**, so duplicates are rejected at build
   time or one step would replay another's result.
-- **`FileStore` sanitises names into file names.** `../` must not escape the
-  root; there is a test for it.
+- **`FileStore` sanitises names into file names, on reads as well as writes.**
+  It used to sanitise only on the way in, so a run id containing anything
+  outside `[A-Za-z0-9._-]` wrote its events to one directory and read them from
+  another: `eventsFor` came back empty, the engine called the run fresh, and
+  every recorded step ran again. `../` must not escape the root, for run ids as
+  well as step names, and two ids that flatten to the same characters must not
+  share a directory. There are tests for all three.
 - **`Scheduler.every` uses fixed delay, not fixed rate.** Fixed rate turns a slow
   run into a stampede.
 
@@ -86,6 +96,12 @@ src/main/java/io/github/martinkm/tandem/
 
 ## Environment note
 
-The machine this was written on has **no JDK and no Maven**, so nothing here was
-compiled locally. CI is the compiler. Expect to iterate through GitHub Actions
-and read the Maven output from the logs.
+The machine this was written on has **no JDK and no Maven**, but Docker runs, so
+build in a container rather than waiting on CI:
+
+```sh
+docker run --rm -v "$(pwd):/w" -w /w maven:3.9-eclipse-temurin-17 mvn -B verify
+```
+
+That gives real test counts in about a minute. Use `-q` sparingly: it hides the
+per-class `Tests run:` lines that tell you a suite actually executed.

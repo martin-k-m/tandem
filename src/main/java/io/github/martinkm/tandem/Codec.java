@@ -10,6 +10,10 @@ package io.github.martinkm.tandem;
  * kind a step is, so supplying a codec is how you say "this one already
  * happened, do not do it twice".
  *
+ * <p>If a run died inside the step, before its output was recorded, there is
+ * nothing to decode and nothing that says whether the work happened. The resume
+ * stops there rather than repeating it; see {@link StepInDoubtException}.
+ *
  * @param <T> the value being encoded
  */
 public interface Codec<T> {

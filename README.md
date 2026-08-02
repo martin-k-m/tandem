@@ -27,8 +27,10 @@ RunResult<Receipt> result = new WorkflowEngine(new FileStore(Path.of(".tandem"))
 ```
 
 If `reserve` fails every attempt, the charge is refunded before the run returns.
-If the process dies instead, running the same run id again skips the charge,
-because its output was recorded, and carries on from there.
+If the process dies instead, running the same run id again replays the charge
+from its recorded output and carries on. If it died inside the charge, before
+anything was recorded, the resume stops there and asks rather than charging a
+second time.
 
 ## Install
 
@@ -52,7 +54,7 @@ GitHub Packages requires authentication even for public artifacts. See
 | **Typed steps** | Each step's output is the next one's input, checked at compile time |
 | **Retries** | Fixed or exponential, capped, with optional jitter, per step or per workflow |
 | **Compensation** | Saga-style undo, in reverse order, continuing if one fails |
-| **Durable resume** | Steps with a `Codec` record their output and are not run twice |
+| **Durable resume** | Steps with a `Codec` record their output, and a resume replays it rather than running the step |
 | **Stores** | In-memory and append-only file, or your own implementation |
 | **Observability** | Every event reaches listeners and the store, so metrics and audit fall out |
 | **Scheduling** | Run later, or repeat at a fixed delay |
@@ -79,13 +81,37 @@ succeeds. Resuming a run decodes that output and moves on without executing the
 step. A step declared without one is executed again.
 
 ```java
-.step("charge", chargeCard, Codec.ofString())   // recorded, never charged twice
+.step("charge", chargeCard, Codec.ofString())   // recorded, replayed on resume
 .step("format", formatReceipt)                  // pure, cheap to repeat
 ```
 
 Tandem does not guess which kind a step is. Inferring it would mean either
 re-running payment calls or silently skipping work that never happened, and both
 of those are worse than asking you to say which one you meant.
+
+### When the process dies inside a step
+
+Running a step and recording its output are two writes to two systems. Nothing
+short of a transaction spanning both can make them one, so there is an instant
+where the work has happened and nothing says so.
+
+Tandem writes the intent first. `STEP_STARTED` reaches the store before the step
+is called, so a resume can see that a step was entered and never finished. When
+it sees that, it stops at that step with a `StepInDoubtException` rather than
+running it again. Whether the charge went through is a question only the payment
+provider can answer, so you answer it:
+
+```java
+engine.confirmCompleted("order-4417", "charge", chargeId, Codec.ofString());  // it happened
+engine.confirmNotCompleted("order-4417", "charge");                          // it did not
+```
+
+So the guarantee is not "never charged twice" under all circumstances, and any
+library claiming that without a distributed transaction is overselling. It is
+this: **a recorded step is never repeated by a resume unless you say it should
+be, and an outcome the log cannot settle is surfaced instead of guessed.** The
+residual window, and what each store does to it, is in
+[docs/durability.md](docs/durability.md).
 
 ## Documentation
 

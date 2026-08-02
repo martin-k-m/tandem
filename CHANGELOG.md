@@ -6,6 +6,44 @@ All notable changes to Tandem are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`FileStore` reads a run back from the directory it wrote it to.** The write
+  path sanitised the run id into a file name and the read path did not, so any
+  id containing a character outside `[A-Za-z0-9._-]` wrote its events to one
+  directory and looked for them in another. `eventsFor` returned nothing, the
+  engine concluded the run was fresh, and every recorded step ran a second time,
+  side effects included. `eventsFor` and `loadOutput` now sanitise the same way
+  `append` and `saveOutput` always did, which also stops a run id resolving
+  outside the store root. Sanitising is no longer lossy either: two ids that
+  flatten to the same characters used to share a directory and interleave their
+  event logs, so anything that needed replacing now carries a short tag derived
+  from the original. Ids that need no replacement are unchanged on disk.
+
+- **A crash inside a recorded step no longer repeats its side effect on
+  resume.** `STEP_STARTED` was already written to the store before a step ran,
+  but the engine read the log only to decide whether it was resuming and
+  discarded the rest. A run that died between the side effect and the recorded
+  output therefore left no trace the resume looked at, and ran the step again. A
+  resume now stops at a step that was started with no outcome and no recorded
+  output, failing with `StepInDoubtException` rather than repeating it.
+- **A step's output is written before its `STEP_SUCCEEDED` event**, not after. In
+  the old order, a crash between the two left a log that looked settled next to
+  a missing output, which the resume would also have resolved by running the
+  step a second time.
+- **The documented guarantee now matches the code.** The README claimed a
+  recorded step was "never charged twice" without qualification.
+  [docs/durability.md](docs/durability.md) states the window, what each store
+  does to it, and what is guaranteed instead.
+
+### Added
+
+- `WorkflowEngine.confirmCompleted` and `WorkflowEngine.confirmNotCompleted`,
+  for settling a step left in doubt once you have checked the system it talked
+  to. Without them a stopped run could never be resumed.
+- `StepInDoubtException`, carrying the run id and step name that need a
+  decision, and `EventType.STEP_IN_DOUBT`.
+
 ## [0.1.0] - 2026-08-02
 
 First release.
