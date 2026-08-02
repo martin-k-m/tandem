@@ -64,7 +64,9 @@ class WorkflowEngineTest {
         AtomicInteger calls = new AtomicInteger();
         Workflow<String, String> workflow =
                 Workflow.<String>named("doomed")
-                        .step(
+                        // The lambda only throws, so there is no return value for
+                        // javac to infer the step's output type from.
+                        .<String>step(
                                 "always-fails",
                                 (String input, StepContext ctx) -> {
                                     calls.incrementAndGet();
@@ -88,7 +90,7 @@ class WorkflowEngineTest {
         AtomicInteger calls = new AtomicInteger();
         Workflow<String, String> workflow =
                 Workflow.<String>named("strict")
-                        .step(
+                        .<String>step(
                                 "once",
                                 (String input, StepContext ctx) -> {
                                     calls.incrementAndGet();
@@ -110,7 +112,7 @@ class WorkflowEngineTest {
                         .compensate((output, ctx) -> undone.add("charge"))
                         .step("reserve", (String input, StepContext ctx) -> input + "-reserved")
                         .compensate((output, ctx) -> undone.add("reserve"))
-                        .step(
+                        .<String>step(
                                 "ship",
                                 (String input, StepContext ctx) -> {
                                     throw new IllegalStateException("out of stock");
@@ -137,7 +139,7 @@ class WorkflowEngineTest {
                                 (output, ctx) -> {
                                     throw new IllegalStateException("undo failed");
                                 })
-                        .step(
+                        .<String>step(
                                 "third",
                                 (String input, StepContext ctx) -> {
                                     throw new IllegalStateException("boom");
