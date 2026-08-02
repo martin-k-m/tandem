@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: verify on Java ${{ matrix.java }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 17 is the floor the pom declares; 21 catches anything that only works
+        # on the version the author happened to have.
+        java: ['17', '21']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      # verify runs the tests and also builds the sources and javadoc jars, so a
+      # broken javadoc tag fails here rather than at release time.
+      - name: Verify
+        run: mvn --batch-mode --no-transfer-progress verify
+
+      - name: The dependency tree stays test-only
+        if: matrix.java == '17'
+        run: |
+          # Anything at compile or runtime scope would land in every consumer's
+          # classpath, which this project deliberately does not do. With none,
+          # the report lists the word "none" and nothing coordinate-shaped.
+          mvn --batch-mode --no-transfer-progress dependency:list \
+            -DincludeScope=runtime -DoutputFile=runtime-deps.txt
+          if grep -qE '^[[:space:]]+[^[:space:]]+:[^[:space:]]+:' runtime-deps.txt; then
+            echo "unexpected runtime dependencies:"
+            cat runtime-deps.txt
+            exit 1
+          fi
+          echo "no runtime dependencies"

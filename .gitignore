@@ -1,0 +1,13 @@
+# Maven
+target/
+dependency-reduced-pom.xml
+
+# JetBrains / Eclipse
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+
+# Tandem's own file store, when run from a checkout
+.tandem/
