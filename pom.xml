@@ -93,6 +93,18 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-javadoc-plugin</artifactId>
         <version>3.6.3</version>
+        <configuration>
+          <!--
+            Everything except "missing". Broken links, malformed HTML and an
+            @param naming a parameter that does not exist are real errors and
+            fail the build. A demand for "@return the run id" on a method called
+            runId() is not: this project's javadoc explains decisions rather
+            than restating signatures, and 60 lines of that boilerplate would
+            bury the comments that say something.
+          -->
+          <doclint>all,-missing</doclint>
+          <failOnWarnings>true</failOnWarnings>
+        </configuration>
         <executions>
           <execution>
             <id>attach-javadocs</id>
