@@ -1,4 +1,4 @@
-package me.blinkdev.tandem;
+package io.github.martinkm.tandem;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;

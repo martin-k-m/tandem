@@ -7,7 +7,7 @@ Context for AI agents working in this repository.
 **Tandem** is a workflow orchestration framework for Java: typed sequential
 steps, retry policies, saga-style compensation, durable resume, in-process
 scheduling and listener-based observability. Published to **GitHub Packages** as
-`me.blinkdev:tandem`. Repo: <https://github.com/martin-k-m/tandem>.
+`io.github.martinkm:tandem`. Repo: <https://github.com/martin-k-m/tandem>.
 
 Maven, not Gradle, and GitHub Packages rather than Maven Central. Central needs
 a Sonatype account and GPG signing; Packages needs neither and was the point of
@@ -39,7 +39,7 @@ CI builds on Java 17 and 21. The pom's floor is 17; raising it means changing
 ## Layout
 
 ```
-src/main/java/me/blinkdev/tandem/
+src/main/java/io/github/martinkm/tandem/
   Workflow, WorkflowBuilder, StepDefinition   definition and the typed builder
   Step, StepContext, Compensation, Codec      what a user implements
   RetryPolicy, Sleeper                        backoff, injectable for tests

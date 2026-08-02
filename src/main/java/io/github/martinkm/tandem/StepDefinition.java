@@ -1,4 +1,4 @@
-package me.blinkdev.tandem;
+package io.github.martinkm.tandem;
 
 /**
  * A step with its generics erased, which is how the engine stores a chain whose

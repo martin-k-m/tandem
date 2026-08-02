@@ -1,4 +1,4 @@
-package me.blinkdev.tandem;
+package io.github.martinkm.tandem;
 
 /**
  * Turns a step's output into text and back.

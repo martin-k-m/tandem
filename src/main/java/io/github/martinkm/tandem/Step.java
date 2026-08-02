@@ -1,4 +1,4 @@
-package me.blinkdev.tandem;
+package io.github.martinkm.tandem;
 
 /**
  * One unit of work in a workflow.

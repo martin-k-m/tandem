@@ -1,4 +1,4 @@
-package me.blinkdev.tandem;
+package io.github.martinkm.tandem;
 
 /**
  * Thrown when a workflow cannot proceed.

@@ -1,4 +1,4 @@
-package me.blinkdev.tandem;
+package io.github.martinkm.tandem;
 
 /** What happened, as recorded in the run log. */
 public enum EventType {

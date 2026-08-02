@@ -1,4 +1,4 @@
-package me.blinkdev.tandem;
+package io.github.martinkm.tandem;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;

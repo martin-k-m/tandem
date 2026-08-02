@@ -31,7 +31,7 @@ First release.
 - **Scheduling.** `Scheduler.after` and `Scheduler.every`, using fixed delay
   rather than fixed rate, on daemon threads.
 - **No runtime dependencies**, enforced in CI. JUnit is test-scoped.
-- Published to GitHub Packages as `me.blinkdev:tandem`.
+- Published to GitHub Packages as `io.github.martinkm:tandem`.
 
 ### Known limitations
 
