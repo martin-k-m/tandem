@@ -3,6 +3,8 @@
 **Workflow orchestration for Java. Durable runs, retries, compensation and scheduling, with no runtime dependencies.**
 
 [![CI](https://github.com/martin-k-m/tandem/actions/workflows/ci.yml/badge.svg)](https://github.com/martin-k-m/tandem/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/tag/martin-k-m/tandem?sort=semver&style=flat-square&label=release&color=7C6CFF)](https://github.com/martin-k-m/tandem/releases)
+[![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-io.github.martinkm%3Atandem-1F883D?style=flat-square&logo=apachemaven&logoColor=fff)](https://github.com/martin-k-m/tandem/packages)
 [![Java](https://img.shields.io/badge/java-17%2B-ED8B00?style=flat-square&logo=openjdk&logoColor=fff)](https://openjdk.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-4F8CFF?style=flat-square)](LICENSE)
 [![Dependencies](https://img.shields.io/badge/runtime%20dependencies-0-7C6CFF?style=flat-square)](pom.xml)
