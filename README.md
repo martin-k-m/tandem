@@ -38,7 +38,7 @@ second time.
 <dependency>
   <groupId>io.github.martinkm</groupId>
   <artifactId>tandem</artifactId>
-  <version>0.1.0</version>
+  <version>1.0.0</version>
 </dependency>
 ```
 
