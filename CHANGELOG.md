@@ -4,7 +4,9 @@ All notable changes to Tandem are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-08-03
+
+A crash can no longer repeat a recorded step, and what it left behind can be found, classified and resumed.
 
 ### Added
 
