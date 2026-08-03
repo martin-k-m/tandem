@@ -537,6 +537,21 @@ class WorkflowEngineTest {
         }
 
         @Override
+        public List<String> listRuns() {
+            return delegate.listRuns();
+        }
+
+        @Override
+        public void saveInput(String runId, String encoded) {
+            delegate.saveInput(runId, encoded);
+        }
+
+        @Override
+        public Optional<String> loadInput(String runId) {
+            return delegate.loadInput(runId);
+        }
+
+        @Override
         public void saveOutput(String runId, String stepName, String encoded) {
             if (!accepting) {
                 throw new IllegalStateException("the store is down");

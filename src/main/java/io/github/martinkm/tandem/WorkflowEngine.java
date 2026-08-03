@@ -40,6 +40,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * spanning both there is no instant at which they happen together. What Tandem
  * guarantees is that the ambiguity is detected and surfaced instead of being
  * resolved by silently running the step a second time.
+ *
+ * <h2>Finding runs after a crash</h2>
+ *
+ * <p>Resuming needs a run id, a definition and the input the run started with,
+ * and a crash keeps only the first of those. {@link #recoverable(Workflow)} asks
+ * the store what it is holding, matches each run against the definition you
+ * pass, and classifies it, so a restart can find what it left behind rather than
+ * having to already know. {@link #resume(RecoverableRun)} continues one from
+ * there.
  */
 public final class WorkflowEngine {
 
@@ -86,30 +95,42 @@ public final class WorkflowEngine {
         // Read once and keep it. The events this run is about to write must not
         // count as history, or a step would look started by an earlier run the
         // moment it starts in this one.
-        List<WorkflowEvent> history = store.eventsFor(runId);
+        RunLog history = new RunLog(store.eventsFor(runId));
         boolean resuming = !history.isEmpty();
 
         emit(
                 collected,
                 event(runId, workflow, "", resuming ? EventType.RUN_RESUMED : EventType.RUN_STARTED, 0, ""));
 
+        if (!resuming) {
+            recordInput(workflow, input, runId);
+        }
+
         Object current = input;
         List<Completed> completed = new ArrayList<>();
 
         for (StepDefinition definition : workflow.steps()) {
+            // Only steps the caller declared replayable are read out of the log
+            // at all: a step without a codec was declared safe to repeat.
             if (resuming && definition.replayable()) {
-                Optional<String> recorded = store.loadOutput(runId, definition.name);
-                if (recorded.isPresent()) {
-                    current = definition.codec.decode(recorded.get());
-                    emit(collected, event(runId, workflow, definition.name, EventType.STEP_REPLAYED, 0, ""));
-                    completed.add(new Completed(definition, current));
-                    continue;
+                StepStanding standing = history.standingOf(definition.name);
+                if (standing.settledByARecordedOutput()) {
+                    Optional<String> recorded = store.loadOutput(runId, definition.name);
+                    if (recorded.isPresent()) {
+                        current = definition.codec.decode(recorded.get());
+                        emit(
+                                collected,
+                                event(runId, workflow, definition.name, EventType.STEP_REPLAYED, 0, ""));
+                        completed.add(new Completed(definition, current));
+                        continue;
+                    }
                 }
-                // No output, but the log says an earlier run was inside this
-                // step when it stopped. Only steps the caller declared
-                // replayable get this treatment: a step without a codec was
-                // declared safe to repeat.
-                if (startedAndUnsettled(history, definition.name)) {
+                // Anything other than NOT_DONE that a recorded output did not
+                // resolve is a question the log cannot answer: a step entered
+                // and never accounted for, a compensation that threw, or an
+                // output the store no longer has. Repeating the step would
+                // answer it by guessing.
+                if (standing != StepStanding.NOT_DONE) {
                     return refuse(collected, workflow, runId, definition.name);
                 }
             }
@@ -138,6 +159,144 @@ public final class WorkflowEngine {
         @SuppressWarnings("unchecked")
         O output = (O) current;
         return RunResult.succeeded(runId, output, collected);
+    }
+
+    /**
+     * Every run of {@code workflow} the store still holds, classified.
+     *
+     * <p>This is the entry point for a restart: the store knows which runs
+     * exist, your code knows the definition, and matching the two by name gives
+     * back runs that can be inspected and continued. Runs belonging to other
+     * workflows in the same store are left out, since nothing could be done with
+     * them here anyway.
+     *
+     * <p>Every run's log is read, so the cost is proportional to what the store
+     * holds rather than to what needs recovering. Prune or archive finished runs
+     * if that becomes a problem; Tandem does not delete anything on your behalf.
+     *
+     * <p>A run another process is executing at this moment is indistinguishable
+     * from one whose process died, because nothing takes a lease on a run. See
+     * {@link RunState}.
+     *
+     * @param <I> the workflow's input type
+     * @param <O> the workflow's output type
+     */
+    public <I, O> List<RecoverableRun<I, O>> recoverable(Workflow<I, O> workflow) {
+        Objects.requireNonNull(workflow, "workflow");
+
+        List<RecoverableRun<I, O>> found = new ArrayList<>();
+        for (String runId : store.listRuns()) {
+            RunLog log = new RunLog(store.eventsFor(runId));
+            if (log.isEmpty() || !workflow.name().equals(log.workflowName())) {
+                continue;
+            }
+            found.add(RecoverableRun.classify(store, workflow, runId, log));
+        }
+        return List.copyOf(found);
+    }
+
+    /**
+     * One run, when you already know its id, or empty if the store holds no
+     * history for it under this workflow.
+     *
+     * @param <I> the workflow's input type
+     * @param <O> the workflow's output type
+     */
+    public <I, O> Optional<RecoverableRun<I, O>> recoverable(
+            Workflow<I, O> workflow, String runId) {
+        Objects.requireNonNull(workflow, "workflow");
+        Objects.requireNonNull(runId, "runId");
+
+        RunLog log = new RunLog(store.eventsFor(runId));
+        if (log.isEmpty() || !workflow.name().equals(log.workflowName())) {
+            return Optional.empty();
+        }
+        return Optional.of(RecoverableRun.classify(store, workflow, runId, log));
+    }
+
+    /**
+     * Continue a run from its classification, with the input it started with.
+     *
+     * <p>Equivalent to calling {@link #run(Workflow, Object, String)} with the
+     * three things the run needs, which is the point: after a restart you have
+     * none of them to hand.
+     *
+     * <p>A run {@link RunState#IN_DOUBT} is not refused here. It runs, and fails
+     * the way it would have failed anyway, with a {@link StepInDoubtException}
+     * naming the step to settle. A run that already succeeded is refused,
+     * because continuing it would repeat every step that has no codec.
+     *
+     * @param <I> the workflow's input type
+     * @param <O> the workflow's output type
+     * @throws TandemException if the run has already completed, or if no input
+     *                         was recorded for it
+     */
+    public <I, O> RunResult<O> resume(RecoverableRun<I, O> run) {
+        Objects.requireNonNull(run, "run");
+        refuseCompleted(run);
+
+        I input =
+                run.input()
+                        .orElseThrow(
+                                () ->
+                                        new TandemException(
+                                                "run "
+                                                        + run.runId()
+                                                        + " recorded no input, so it cannot be"
+                                                        + " resumed on its own; declare one with"
+                                                        + " WorkflowBuilder.input(Codec) so later"
+                                                        + " runs record theirs, and pass this"
+                                                        + " run's input to resume(run, input)"));
+        return run(run.workflow(), input, run.runId());
+    }
+
+    /**
+     * Continue a run with an input you supply, for a workflow that does not
+     * record one or a run that stopped before it could.
+     *
+     * <p>The input is recorded as part of resuming, when the definition says how,
+     * so the next crash does not have to ask again.
+     *
+     * @param <I> the workflow's input type
+     * @param <O> the workflow's output type
+     * @throws TandemException if the run has already completed
+     */
+    public <I, O> RunResult<O> resume(RecoverableRun<I, O> run, I input) {
+        Objects.requireNonNull(run, "run");
+        refuseCompleted(run);
+
+        recordInput(run.workflow(), input, run.runId());
+        return run(run.workflow(), input, run.runId());
+    }
+
+    private static void refuseCompleted(RecoverableRun<?, ?> run) {
+        if (run.state() == RunState.COMPLETED) {
+            throw new TandemException(
+                    "run "
+                            + run.runId()
+                            + " already succeeded, so resuming it would run every step without a"
+                            + " codec a second time");
+        }
+    }
+
+    /**
+     * Records the input a run started with, when the definition says how to
+     * encode it.
+     *
+     * <p>After {@code RUN_STARTED} rather than before it, because the log is
+     * what says a run exists: an input in the store with no history behind it
+     * would be a run nothing could list. The cost is a window where a run is
+     * listed with no input, which {@link #resume(RecoverableRun, Object)} exists
+     * to cover.
+     *
+     * <p>A null input is not recorded. There is nothing for a codec to encode,
+     * and passing null back in is something the caller can do without help.
+     */
+    private <I> void recordInput(Workflow<I, ?> workflow, I input, String runId) {
+        Codec<I> codec = workflow.inputCodec();
+        if (codec != null && input != null) {
+            store.saveInput(runId, codec.encode(input));
+        }
     }
 
     /**
@@ -253,34 +412,7 @@ public final class WorkflowEngine {
     }
 
     /**
-     * Whether an earlier run wrote a started event for this step and nothing
-     * that says how it ended.
-     *
-     * <p>Every attempt writes {@link EventType#STEP_STARTED} before running the
-     * step and exactly one of succeeded, retrying or failed after it. A started
-     * event with no partner means the process stopped inside the step body, so
-     * whether the side effect happened is not knowable from the log. Events that
-     * say nothing about an attempt's outcome, such as a previous refusal, are
-     * ignored, or a run would talk itself out of its own doubt.
-     */
-    private static boolean startedAndUnsettled(List<WorkflowEvent> history, String stepName) {
-        int started = 0;
-        int settled = 0;
-        for (WorkflowEvent past : history) {
-            if (!past.stepName().equals(stepName)) {
-                continue;
-            }
-            switch (past.type()) {
-                case STEP_STARTED -> started++;
-                case STEP_SUCCEEDED, STEP_RETRYING, STEP_FAILED -> settled++;
-                default -> { }
-            }
-        }
-        return started > settled;
-    }
-
-    /**
-     * Ends a resume at a step that may or may not have run.
+     * Ends a resume at a step whose standing the log cannot settle.
      *
      * <p>Compensations deliberately do not run. They would undo steps whose
      * recorded outputs stay in the store, so a later resume would replay values
@@ -323,15 +455,20 @@ public final class WorkflowEngine {
                                 ""));
             } catch (Exception thrown) {
                 // Keep going. Stopping here leaves more undone than continuing.
+                //
+                // Its own event type, not a note on the compensated event: a
+                // later resume has to tell a step that was undone from one that
+                // may or may not have been, and reading that off a message
+                // string is not a decision worth taking twice.
                 emit(
                         collected,
                         event(
                                 runId,
                                 workflow,
                                 done.definition.name,
-                                EventType.STEP_COMPENSATED,
+                                EventType.STEP_COMPENSATION_FAILED,
                                 1,
-                                "compensation failed: " + describe(thrown)));
+                                describe(thrown)));
             }
         }
     }

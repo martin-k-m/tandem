@@ -124,6 +124,93 @@ class StoreTest {
     }
 
     @Test
+    void bothStoresRoundTripARunInput(@TempDir Path root) {
+        InMemoryStore memory = new InMemoryStore();
+        assertTrue(memory.loadInput("run-1").isEmpty());
+        memory.saveInput("run-1", "order-4417");
+        assertEquals("order-4417", memory.loadInput("run-1").orElseThrow());
+
+        FileStore files = new FileStore(root);
+        files.saveInput("run-1", "order-4417");
+        assertEquals("order-4417", new FileStore(root).loadInput("run-1").orElseThrow());
+        assertTrue(new FileStore(root).loadInput("run-2").isEmpty());
+    }
+
+    @Test
+    void inMemoryStoreListsTheRunsItHasEventsFor() {
+        InMemoryStore store = new InMemoryStore();
+        assertTrue(store.listRuns().isEmpty());
+
+        store.append(event("b", "one", EventType.RUN_STARTED));
+        store.append(event("a", "one", EventType.RUN_STARTED));
+        store.append(event("a", "one", EventType.STEP_STARTED));
+
+        assertEquals(List.of("a", "b"), store.listRuns());
+    }
+
+    @Test
+    void fileStoreListsRunsAcrossAReopen(@TempDir Path root) {
+        FileStore first = new FileStore(root);
+        assertTrue(first.listRuns().isEmpty());
+        first.append(event("run-2", "step", EventType.RUN_STARTED));
+        first.append(event("run-1", "step", EventType.RUN_STARTED));
+
+        assertEquals(List.of("run-1", "run-2"), new FileStore(root).listRuns());
+    }
+
+    @Test
+    void listRunsGivesBackARunIdThatNeededSanitising(@TempDir Path root) {
+        // The id is what eventsFor is called with, so a listing that returned
+        // the directory name would name a run whose history cannot be read: the
+        // engine would call it fresh and every recorded step would run again.
+        FileStore store = new FileStore(root);
+        String runId = "order/4417 #2";
+        store.append(event(runId, "charge", EventType.RUN_STARTED));
+
+        List<String> listed = new FileStore(root).listRuns();
+
+        assertEquals(List.of(runId), listed);
+        assertEquals(1, store.eventsFor(listed.get(0)).size(), "the listed id read back no history");
+    }
+
+    @Test
+    void listRunsKeepsApartTwoIdsThatSanitiseAlike(@TempDir Path root) {
+        FileStore store = new FileStore(root);
+        store.append(event("a/b", "step", EventType.RUN_STARTED));
+        store.append(event("a_b", "step", EventType.RUN_STARTED));
+
+        assertEquals(List.of("a/b", "a_b"), new FileStore(root).listRuns());
+    }
+
+    @Test
+    void listRunsSkipsADirectoryWithNoLog(@TempDir Path root) {
+        // An input written by a process that died before its first event. There
+        // is no history to resume, so there is nothing to list.
+        FileStore store = new FileStore(root);
+        store.saveInput("run-1", "order-4417");
+
+        assertTrue(store.listRuns().isEmpty());
+    }
+
+    @Test
+    void listRunsStillNamesARunWrittenBeforeIdsWereRecorded(@TempDir Path root) throws IOException {
+        // A store directory left by an earlier version, which wrote no id file.
+        // The name is the id when sanitising would not have touched it.
+        Path directory = root.resolve("order-4417");
+        Files.createDirectories(directory);
+        Files.writeString(
+                directory.resolve("events.jsonl"),
+                JsonLine.encode(event("order-4417", "charge", EventType.RUN_STARTED).toMap())
+                        + System.lineSeparator(),
+                StandardCharsets.UTF_8);
+
+        FileStore store = new FileStore(root);
+
+        assertEquals(List.of("order-4417"), store.listRuns());
+        assertEquals(1, store.eventsFor("order-4417").size());
+    }
+
+    @Test
     void jsonLineRoundTripsAwkwardValues() {
         Map<String, String> fields = new LinkedHashMap<>();
         fields.put("plain", "value");

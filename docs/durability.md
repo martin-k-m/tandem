@@ -136,6 +136,63 @@ restart and shows up in the audit trail as `confirmed out of band`.
   thing to do, and Tandem gives you a stable one: `StepContext.runId()` plus
   `stepName()`.
 
+## Recovering after a crash
+
+`resume` needs the run id, the `Workflow` object and the original input. A crash
+keeps only the first of those, and nothing could enumerate what was left
+unfinished, so durable resume was unusable in exactly the situation it exists
+for. `recoverable` closes that.
+
+```java
+WorkflowEngine engine = new WorkflowEngine(new FileStore(dir));
+
+for (RecoverableRun<String, String> run : engine.recoverable(checkout)) {
+    switch (run.state()) {
+        case RESUMABLE -> engine.resume(run);
+        case IN_DOUBT  -> alertSomebody(run.runId(), run.stepInDoubt().orElseThrow());
+        case FAILED, COMPLETED -> { }
+    }
+}
+```
+
+The input comes back with the run, which is why stores persist it: without it
+there is nothing to resume with. It is written through the same codec as any
+step output, and never inferred, for the same reason.
+
+### The four states
+
+| State | Meaning |
+|---|---|
+| `COMPLETED` | finished, nothing to do |
+| `FAILED` | ran to a failure and compensated |
+| `RESUMABLE` | stopped between steps, safe to continue |
+| `IN_DOUBT` | stopped **inside** a recorded step |
+
+`IN_DOUBT` is the one worth understanding. A step wrote `STEP_STARTED`, then the
+process died before its output was recorded, so the side effect may or may not
+have happened. Tandem cannot tell, and neither can anything else after the fact:
+that is what the two-phase write buys, the ability to know that you do not know.
+Resuming one raises `StepInDoubtException` rather than guessing, because
+guessing means either charging a card twice or never charging it, and picking
+silently is worse than stopping.
+
+Deciding what to do about it is the caller's, since only the caller can ask the
+payment provider whether the charge landed.
+
+### Run ids survive the round trip
+
+`listRuns` gives back the id you used, not the directory name. `FileStore`
+sanitises an id into a file name and that is not reversible, so the id is
+recorded rather than inferred. Two ids that sanitise to the same characters stay
+separate runs.
+
+### It lists what the store holds
+
+`recoverable` walks everything in the store, so a store nobody prunes grows and
+the call gets slower in proportion to what it holds rather than to what needs
+recovering. Archive or delete finished runs.
+
+
 ## Codecs
 
 Built in: `Codec.ofString()`, `ofInt()`, `ofLong()`, `ofDouble()`, `ofBoolean()`.

@@ -59,6 +59,27 @@ GitHub Packages requires authentication even for public artifacts. See
 | **Observability** | Every event reaches listeners and the store, so metrics and audit fall out |
 | **Scheduling** | Run later, or repeat at a fixed delay |
 
+## Finding what a crash left behind
+
+`resume` needs a run id, a workflow and the original input, and a crash keeps
+only the run id. So the engine can find them for you:
+
+```java
+for (RecoverableRun<String, String> run : engine.recoverable(checkout)) {
+    switch (run.state()) {
+        case RESUMABLE -> engine.resume(run);
+        case IN_DOUBT  -> alertSomebody(run.runId(), run.stepInDoubt().orElseThrow());
+        case FAILED, COMPLETED -> { }
+    }
+}
+```
+
+`IN_DOUBT` means the process died inside a recorded step, so the side effect may
+or may not have happened. Tandem stops rather than guessing: guessing means
+either charging twice or never charging, and only you can ask the payment
+provider which it was.
+
+
 ## What is not
 
 Distributed coordination, leader election, a worker protocol, dead letter

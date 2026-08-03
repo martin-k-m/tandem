@@ -25,10 +25,12 @@ public final class Workflow<I, O> {
 
     private final String name;
     private final List<StepDefinition> steps;
+    private final Codec<I> inputCodec;
 
-    Workflow(String name, List<StepDefinition> steps) {
+    Workflow(String name, List<StepDefinition> steps, Codec<I> inputCodec) {
         this.name = Objects.requireNonNull(name, "name");
         this.steps = List.copyOf(steps);
+        this.inputCodec = inputCodec;
     }
 
     /**
@@ -57,6 +59,11 @@ public final class Workflow<I, O> {
 
     List<StepDefinition> steps() {
         return steps;
+    }
+
+    /** How a run's input is recorded, or null when this definition does not record it. */
+    Codec<I> inputCodec() {
+        return inputCodec;
     }
 
     @Override

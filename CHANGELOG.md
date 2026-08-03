@@ -6,6 +6,23 @@ All notable changes to Tandem are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`recoverable` and `resume`: pick up what a crash left behind.** Resuming
+  needed the run id, the `Workflow` and the original input, and a crash kept
+  only the first, so durable resume could not be used in the situation it exists
+  for. Stores persist the input now, through the same codec as any step output
+  and never inferred, and `listRuns` enumerates what they hold.
+
+  Each run comes back classified: `COMPLETED`, `FAILED`, `RESUMABLE`, or
+  `IN_DOUBT` for one that died inside a recorded step, where the side effect may
+  or may not have happened. Resuming an in-doubt run raises
+  `StepInDoubtException` rather than guessing, since guessing means charging
+  twice or never charging, and only the caller can ask which.
+
+  `listRuns` returns the id you used rather than the directory name, which
+  sanitising cannot give back, so the id is recorded rather than inferred.
+
 ### Fixed
 
 - **`FileStore` reads a run back from the directory it wrote it to.** The write

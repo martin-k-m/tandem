@@ -20,6 +20,7 @@ public final class WorkflowBuilder<I, C> {
     private final String name;
     private final List<StepDefinition> steps = new ArrayList<>();
     private RetryPolicy defaultRetry = RetryPolicy.none();
+    private Codec<I> inputCodec;
 
     WorkflowBuilder(String name) {
         if (name == null || name.isBlank()) {
@@ -35,6 +36,26 @@ public final class WorkflowBuilder<I, C> {
      */
     public WorkflowBuilder<I, C> retry(RetryPolicy policy) {
         this.defaultRetry = Objects.requireNonNull(policy, "policy");
+        return this;
+    }
+
+    /**
+     * Record the input each run starts with, so a run left behind by a crash can
+     * be continued by whoever finds it rather than only by whoever still holds
+     * the input.
+     *
+     * <p>The same rule as a step's codec, for the same reason: nothing is
+     * inferred. Without this, a run is still resumable, but only by a caller
+     * that can produce the original input again, and after a restart that is
+     * usually nobody. With it,
+     * {@link WorkflowEngine#recoverable(Workflow) recoverable} returns runs that
+     * {@link WorkflowEngine#resume(RecoverableRun) resume} continues on its own.
+     *
+     * <p>The input is written once, when the run starts, and is never rewritten,
+     * so what comes back is what the run actually began with.
+     */
+    public WorkflowBuilder<I, C> input(Codec<I> codec) {
+        this.inputCodec = Objects.requireNonNull(codec, "codec");
         return this;
     }
 
@@ -83,7 +104,7 @@ public final class WorkflowBuilder<I, C> {
         if (steps.isEmpty()) {
             throw new IllegalStateException("a workflow needs at least one step");
         }
-        return new Workflow<>(name, steps);
+        return new Workflow<>(name, steps, inputCodec);
     }
 
     @SuppressWarnings("unchecked")
