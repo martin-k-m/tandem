@@ -38,7 +38,7 @@ second time.
 <dependency>
   <groupId>io.github.martinkm</groupId>
   <artifactId>tandem</artifactId>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
 </dependency>
 ```
 
@@ -47,12 +47,13 @@ at `https://maven.pkg.github.com/martin-k-m/tandem` and a GitHub token, because
 GitHub Packages requires authentication even for public artifacts. See
 [docs/install.md](docs/install.md).
 
-## What is in 0.1
+## What is in it
 
 | | |
 | :-- | :-- |
 | **Typed steps** | Each step's output is the next one's input, checked at compile time |
 | **Retries** | Fixed or exponential, capped, with optional jitter, per step or per workflow |
+| **Timeouts** | A step that hangs is abandoned rather than hanging the run |
 | **Compensation** | Saga-style undo, in reverse order, continuing if one fails |
 | **Durable resume** | Steps with a `Codec` record their output, and a resume replays it rather than running the step |
 | **Stores** | In-memory and append-only file, or your own implementation |

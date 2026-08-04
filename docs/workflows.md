@@ -81,6 +81,47 @@ Workflow.<String>named("api")
 
 `retry` reads forward and does not reach backwards, so ordering is not a trap.
 
+## Timeouts
+
+A retry policy answers "what if this fails". It has nothing to say about a step
+that neither succeeds nor fails: an HTTP call with no read timeout, a lock that
+is never granted, a query behind a table lock. Without a bound on duration those
+hang the run for as long as the process lives, and no configured attempt is ever
+reached, because nothing ever throws.
+
+```java
+Workflow.<Order>named("checkout")
+        .retry(RetryPolicy.exponential(3, Duration.ofMillis(200)))
+        .timeout(Duration.ofSeconds(10))                 // steps added after this
+        .step("charge", charge)
+        .timeout(null)                                   // and no bound after that
+        .step("settle", settle)
+```
+
+`timeout` reads forward like `retry`. A step that exceeds its budget fails with
+`StepTimedOutException`, which is an ordinary failure: the retry policy
+applies to it, and if the attempts run out the run fails and earlier steps are
+compensated.
+
+### What a timeout does not promise
+
+**The step may still be running.** Java cannot stop a thread, only ask it to
+stop. The engine runs a bounded step on another thread so it can stop *waiting*,
+and cancels it when the budget runs out, which interrupts that thread. A step
+sitting in a socket read that ignores interruption carries on, and may still
+commit its side effect after the engine has given up on it.
+
+That is the same uncertainty `StepInDoubtException` describes, reached from the
+other direction. So a bound belongs on a step that is safe to run again: one
+that is idempotent, or one with a compensation to undo whichever copy of it
+lands. Putting a timeout on a bare charge call and retrying it is how you charge
+a card twice.
+
+The threads are daemons and the pool is created on first use, so a workflow with
+no timeouts pays nothing for the machinery and a forgotten engine does not hold
+the JVM open. `WorkflowEngine` is `AutoCloseable` if you would rather release
+them promptly.
+
 ## Compensation
 
 When a later step fails, completed steps are undone in reverse order:

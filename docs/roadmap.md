@@ -26,7 +26,8 @@ right: no scheduling, no context switching, and a stack trace that reads
 straight through your steps.
 
 For long ones it is a real limit. A workflow that waits an hour occupies a
-thread for an hour. The current answer is to run it on an executor you control,
+thread for an hour. A step timeout bounds how long any single step may take, but
+it does not change where the run executes: the calling thread waits either way. The current answer is to run it on an executor you control,
 which works but does not survive a restart. Persistent timers and a worker
 protocol are what would actually fix it, which is why both are on the list.
 

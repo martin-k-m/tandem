@@ -9,6 +9,12 @@ import java.util.Optional;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Runs workflows.
@@ -50,12 +56,14 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * having to already know. {@link #resume(RecoverableRun)} continues one from
  * there.
  */
-public final class WorkflowEngine {
+public final class WorkflowEngine implements AutoCloseable {
 
     private final WorkflowStore store;
     private final Sleeper sleeper;
     private final Random random;
     private final List<WorkflowListener> listeners = new CopyOnWriteArrayList<>();
+    /** Created on first timed step; null until then. See {@link #timeoutExecutor()}. */
+    private volatile ExecutorService timeoutExecutor;
 
     /** An engine backed by an {@link InMemoryStore}. */
     public WorkflowEngine() {
@@ -336,6 +344,88 @@ public final class WorkflowEngine {
     }
 
     /** Runs one step, retrying per its policy. */
+    /**
+     * Run a step, giving up on it after its timeout.
+     *
+     * <p>The step goes on another thread because that is the only way to stop
+     * waiting for it: there is no interruptible form of "call this method". When
+     * the budget runs out the future is cancelled, which interrupts that thread,
+     * and interruption is a request rather than a guarantee: a step that never
+     * checks for it keeps running. The engine stops waiting either way, which is
+     * the point, and {@link StepTimedOutException} says plainly that the step's
+     * side effect is now unconfirmed.
+     */
+    private Object runBounded(StepDefinition definition, Object input, StepContext context)
+            throws Exception {
+        Future<Object> pending = timeoutExecutor().submit(() -> definition.step.run(input, context));
+        try {
+            return pending.get(definition.timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException expired) {
+            pending.cancel(true);
+            throw new StepTimedOutException(definition.name, definition.timeout);
+        } catch (ExecutionException failed) {
+            // Unwrap, so a step's own exception reaches the retry policy as
+            // itself rather than as a wrapper nobody wrote a catch for.
+            Throwable cause = failed.getCause();
+            if (cause instanceof Exception exception) {
+                throw exception;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failed;
+        } catch (InterruptedException interrupted) {
+            // The caller is being shut down, not the step. Stop the step too
+            // rather than leaving it running against a run nobody is waiting for.
+            pending.cancel(true);
+            throw interrupted;
+        }
+    }
+
+    /**
+     * The pool timed steps run on, created on first use.
+     *
+     * <p>Lazy because a workflow with no timeouts should not pay for a thread
+     * pool, and daemon threads because forgetting {@link #close()} should not
+     * keep a JVM alive. Cached rather than fixed: the threads here spend their
+     * time blocked in someone else's I/O, so a bound would queue steps behind
+     * each other and count the wait against the next one's budget.
+     */
+    private ExecutorService timeoutExecutor() {
+        ExecutorService existing = timeoutExecutor;
+        if (existing != null) {
+            return existing;
+        }
+        synchronized (this) {
+            if (timeoutExecutor == null) {
+                timeoutExecutor =
+                        Executors.newCachedThreadPool(
+                                runnable -> {
+                                    Thread thread = new Thread(runnable, "tandem-step");
+                                    thread.setDaemon(true);
+                                    return thread;
+                                });
+            }
+            return timeoutExecutor;
+        }
+    }
+
+    /**
+     * Release the threads timed steps ran on. Optional: they are daemons, so an
+     * engine that is simply dropped does not hold the process open.
+     */
+    @Override
+    public void close() {
+        ExecutorService running;
+        synchronized (this) {
+            running = timeoutExecutor;
+            timeoutExecutor = null;
+        }
+        if (running != null) {
+            running.shutdownNow();
+        }
+    }
+
     private Attempted attempt(
             List<WorkflowEvent> collected,
             Workflow<?, ?> workflow,
@@ -366,7 +456,9 @@ public final class WorkflowEngine {
 
             Object output;
             try {
-                output = definition.step.run(input, context);
+                output = definition.bounded()
+                        ? runBounded(definition, input, context)
+                        : definition.step.run(input, context);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 emit(

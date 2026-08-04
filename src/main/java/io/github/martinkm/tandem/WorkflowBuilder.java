@@ -1,5 +1,6 @@
 package io.github.martinkm.tandem;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -20,6 +21,7 @@ public final class WorkflowBuilder<I, C> {
     private final String name;
     private final List<StepDefinition> steps = new ArrayList<>();
     private RetryPolicy defaultRetry = RetryPolicy.none();
+    private Duration defaultTimeout;
     private Codec<I> inputCodec;
 
     WorkflowBuilder(String name) {
@@ -36,6 +38,29 @@ public final class WorkflowBuilder<I, C> {
      */
     public WorkflowBuilder<I, C> retry(RetryPolicy policy) {
         this.defaultRetry = Objects.requireNonNull(policy, "policy");
+        return this;
+    }
+
+    /**
+     * How long a step added after this call may take before the attempt is
+     * abandoned. Reads forward, the same as {@link #retry}: steps already added
+     * keep whatever bound they had, and passing {@code null} removes the bound
+     * from later steps again.
+     *
+     * <p>Without one, a step that hangs hangs the run. A retry policy does not
+     * help there. It answers "what if this fails", and a step that is stuck has
+     * not failed, so no configured attempt is ever reached.
+     *
+     * <p>Read {@link StepTimedOutException} before reaching for this. A
+     * timed-out step may still be running: Java cannot stop a thread, only ask
+     * it to stop, and a step that never checks keeps going. A bound belongs on a
+     * step that is safe to run twice, or one with a {@link Compensation}.
+     */
+    public WorkflowBuilder<I, C> timeout(Duration timeout) {
+        if (timeout != null && (timeout.isNegative() || timeout.isZero())) {
+            throw new IllegalArgumentException("a timeout must be positive, got " + timeout);
+        }
+        this.defaultTimeout = timeout;
         return this;
     }
 
@@ -127,7 +152,8 @@ public final class WorkflowBuilder<I, C> {
                         stepName,
                         (Step<Object, Object>) (Step<?, ?>) step,
                         policy,
-                        (Codec<Object>) (Codec<?>) codec));
+                        (Codec<Object>) (Codec<?>) codec,
+                        defaultTimeout));
 
         return (WorkflowBuilder<I, N>) (WorkflowBuilder<I, ?>) this;
     }
