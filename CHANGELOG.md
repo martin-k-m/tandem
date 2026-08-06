@@ -4,6 +4,19 @@ All notable changes to Tandem are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-08-06
+
+### Added
+
+- **A per-step time bound**: a step that hangs used to hang the run, which is the
+  one failure a recovery tool must not have. It now fails on its own deadline and
+  leaves a record the resume path can read.
+
+### Changed
+
+- **The install snippet shows the published version**, rather than a number that
+  drifted from whatever was actually on the registry.
+
 ## [1.0.0] - 2026-08-03
 
 A crash can no longer repeat a recorded step, and what it left behind can be found, classified and resumed.
