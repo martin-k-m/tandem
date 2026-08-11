@@ -195,7 +195,8 @@ recovering. Archive or delete finished runs.
 
 ## Codecs
 
-Built in: `Codec.ofString()`, `ofInt()`, `ofLong()`, `ofDouble()`, `ofBoolean()`.
+Built in: `Codec.ofString()`, `ofInt()`, `ofLong()`, `ofDouble()`, `ofBoolean()`,
+and `ofEnum(Type.class)`, which records an enum by its constant name.
 
 Anything else is two methods:
 

@@ -91,4 +91,32 @@ public interface Codec<T> {
             }
         };
     }
+
+    /**
+     * Records an enum by its constant name, which is the stable form: an ordinal
+     * shifts the moment a constant is added anywhere before it, and a name does
+     * not. A step that returns an enum is a common enough shape that spelling out
+     * a codec for it every time is friction, and this is the obvious encoding.
+     *
+     * <p>A name the type no longer holds fails on decode rather than resolving to
+     * something else, which is the right end for a recorded value the definition
+     * has since dropped.
+     *
+     * @param <E> the enum type being encoded
+     * @param type the enum's class, needed to decode a name back to a constant
+     */
+    static <E extends Enum<E>> Codec<E> ofEnum(Class<E> type) {
+        java.util.Objects.requireNonNull(type, "type");
+        return new Codec<>() {
+            @Override
+            public String encode(E value) {
+                return value.name();
+            }
+
+            @Override
+            public E decode(String text) {
+                return Enum.valueOf(type, text.trim());
+            }
+        };
+    }
 }
