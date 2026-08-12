@@ -44,6 +44,7 @@ src/main/java/io/github/martinkm/tandem/
   Step, StepContext, Compensation, Codec      what a user implements
   RetryPolicy, Sleeper                        backoff, injectable for tests
   WorkflowEngine, RunResult                   execution, retries, replay
+  WorkflowInspector, InspectorCli             read-only view of a store, plus a CLI
   WorkflowStore, InMemoryStore, FileStore     durability
   WorkflowEvent, EventType, WorkflowListener  the log and observability
   JsonLine                                    the file store's line format

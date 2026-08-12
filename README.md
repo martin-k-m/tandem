@@ -58,6 +58,7 @@ GitHub Packages requires authentication even for public artifacts. See
 | **Durable resume** | Steps with a `Codec` record their output, and a resume replays it rather than running the step |
 | **Stores** | In-memory and append-only file, or your own implementation |
 | **Observability** | Every event reaches listeners and the store, so metrics and audit fall out |
+| **Inspection** | Read what a store holds, and a small CLI over it, without running anything |
 | **Scheduling** | Run later, or repeat at a fixed delay |
 
 ## Finding what a crash left behind
@@ -79,6 +80,38 @@ for (RecoverableRun<String, String> run : engine.recoverable(checkout)) {
 or may not have happened. Tandem stops rather than guessing: guessing means
 either charging twice or never charging, and only you can ask the payment
 provider which it was.
+
+## Looking without running
+
+Recovery needs the definition, because continuing a run needs it. Looking is a
+smaller question, so `WorkflowInspector` answers it from the store alone: which
+runs it holds, what state each is in, and how far each got. It returns records
+and never runs a step, resumes a run or writes to the store.
+
+```java
+WorkflowInspector inspector = new WorkflowInspector(new FileStore(Path.of(".tandem")));
+for (WorkflowInspector.RunSummary run : inspector.list()) {
+    System.out.println(run.runId() + " " + run.status());
+}
+inspector.describe("order-4417").ifPresent(run -> {
+    System.out.println(run.workflowName().orElse("(unrecorded)") + " " + run.status());
+    run.steps().forEach(step -> System.out.println("  " + step.name() + " " + step.outcome()));
+});
+```
+
+There is a command line over it, pointed at a `FileStore` directory:
+
+```sh
+java -cp tandem.jar io.github.martinkm.tandem.InspectorCli list .tandem
+java -cp tandem.jar io.github.martinkm.tandem.InspectorCli show .tandem order-4417
+```
+
+Two limits are worth stating. Working without the definition, the inspector
+cannot see which steps carry a `Codec`, so a run that died inside a step with no
+codec, one the engine would call `RESUMABLE` because repeating it is safe, is
+reported `IN_DOUBT` here. It never resumes, so that is a label and not a
+decision. And outputs come back in the store's encoded form, since decoding
+needs the codec the definition holds.
 
 
 ## What is not

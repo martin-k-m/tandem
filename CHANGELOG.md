@@ -4,6 +4,26 @@ All notable changes to Tandem are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A read-only inspector.** `WorkflowInspector` reads what a store holds without
+  running anything: the run ids it has, each run's classified state, and per run
+  the ordered steps with their outcomes and any recorded output. It returns plain
+  records and pairs with the durability story, letting someone look at a store
+  after a restart without touching a definition. `InspectorCli` is a small
+  command line over it, `list <dir>` and `show <dir> <runId>` against a
+  `FileStore` directory, returning an exit code rather than calling
+  `System.exit` from the logic so it stays testable.
+
+  The state comes from the same rule the recovery scan uses, now shared in one
+  place. Working without the definition costs two things, both stated rather than
+  hidden: the inspector cannot see which steps carry a `Codec`, so a run that
+  died inside a repeat-safe step is reported `IN_DOUBT` where the engine, given
+  the definition, would call it `RESUMABLE`; and outputs come back in the store's
+  encoded form, since decoding needs the codec.
+
 ## [1.1.0] - 2026-08-06
 
 ### Added
