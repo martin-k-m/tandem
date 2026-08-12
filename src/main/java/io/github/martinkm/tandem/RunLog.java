@@ -1,9 +1,12 @@
 package io.github.martinkm.tandem;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * A run's events, folded into the few questions anybody asks of them.
@@ -22,6 +25,7 @@ final class RunLog {
 
     private final List<WorkflowEvent> events;
     private final Map<String, StepStanding> standings;
+    private final List<String> stepOrder;
     private final String workflowName;
     private final EventType ending;
 
@@ -29,6 +33,10 @@ final class RunLog {
         this.events = events;
 
         Map<String, Tally> tallies = new HashMap<>();
+        // First-appearance order, which is the order the steps ran in. The
+        // standings map is keyed by name and says nothing about sequence, and a
+        // reader that lists a run's steps wants them in the order they happened.
+        Set<String> seen = new LinkedHashSet<>();
         String name = "";
         EventType end = null;
 
@@ -43,15 +51,19 @@ final class RunLog {
                 // one ended, not that an earlier one failed.
                 case RUN_STARTED, RUN_RESUMED -> end = null;
                 case RUN_SUCCEEDED, RUN_FAILED -> end = event.type();
-                default -> tallies
-                        .computeIfAbsent(event.stepName(), key -> new Tally())
-                        .fold(event.type());
+                default -> {
+                    seen.add(event.stepName());
+                    tallies
+                            .computeIfAbsent(event.stepName(), key -> new Tally())
+                            .fold(event.type());
+                }
             }
         }
 
         Map<String, StepStanding> folded = new HashMap<>();
         tallies.forEach((step, tally) -> folded.put(step, tally.standing()));
         this.standings = Map.copyOf(folded);
+        this.stepOrder = List.copyOf(new ArrayList<>(seen));
         this.workflowName = name;
         this.ending = end;
     }
@@ -67,6 +79,11 @@ final class RunLog {
 
     StepStanding standingOf(String stepName) {
         return standings.getOrDefault(stepName, StepStanding.NOT_DONE);
+    }
+
+    /** The steps this run has events for, in the order they first appear. */
+    List<String> stepsInOrder() {
+        return stepOrder;
     }
 
     /**

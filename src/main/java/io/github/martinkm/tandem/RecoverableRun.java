@@ -56,17 +56,7 @@ public final class RecoverableRun<I, O> {
 
         boolean succeeded = log.ending() == EventType.RUN_SUCCEEDED;
         String doubt = succeeded ? null : firstStepInDoubt(store, workflow, runId, log);
-
-        RunState state;
-        if (succeeded) {
-            state = RunState.COMPLETED;
-        } else if (doubt != null) {
-            state = RunState.IN_DOUBT;
-        } else if (log.ending() == EventType.RUN_FAILED) {
-            state = RunState.FAILED;
-        } else {
-            state = RunState.RESUMABLE;
-        }
+        RunState state = decide(log.ending(), doubt != null);
 
         // Only worth a read when there is a codec that could decode it.
         String encodedInput =
@@ -74,6 +64,33 @@ public final class RecoverableRun<I, O> {
 
         return new RecoverableRun<>(
                 workflow, runId, state, doubt, encodedInput, log.events());
+    }
+
+    /**
+     * Turns how a run's latest attempt ended, plus whether a step is holding it
+     * in doubt, into one of the four states.
+     *
+     * <p>The one place the mapping lives, so a recovery scan and a read-only
+     * inspection cannot drift into two different ideas of what a log means. What
+     * counts as a doubt is the caller's to decide, since that is the part that
+     * needs the workflow definition; {@link WorkflowInspector} answers it from
+     * the log alone and this rule stays the same.
+     *
+     * @param ending  how the latest attempt ended, or null if it has not
+     * @param inDoubt whether a step is holding the run in doubt
+     * @return the classified state
+     */
+    static RunState decide(EventType ending, boolean inDoubt) {
+        if (ending == EventType.RUN_SUCCEEDED) {
+            return RunState.COMPLETED;
+        }
+        if (inDoubt) {
+            return RunState.IN_DOUBT;
+        }
+        if (ending == EventType.RUN_FAILED) {
+            return RunState.FAILED;
+        }
+        return RunState.RESUMABLE;
     }
 
     /**

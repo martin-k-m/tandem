@@ -8,7 +8,7 @@ package io.github.martinkm.tandem;
  * that survives a retry, changes when a compensation undoes it, and stops being
  * knowable when the process dies at the wrong moment.
  */
-enum StepStanding {
+public enum StepStanding {
 
     /**
      * Nothing the log holds says the effect is in place: the step never ran, its
