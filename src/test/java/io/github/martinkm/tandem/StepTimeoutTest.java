@@ -89,7 +89,15 @@ class StepTimeoutTest {
             Workflow<String, String> workflow =
                     Workflow.<String>named("eventually")
                             .retry(RetryPolicy.fixed(3, Duration.ZERO))
-                            .timeout(Duration.ofMillis(150))
+                            // Generous on purpose. The budget has to be far
+                            // shorter than the hang and far longer than the time
+                            // it takes to hand a step to a thread, and the
+                            // second margin is the one that bites: at 150ms this
+                            // failed about once in ten full-suite runs, when a
+                            // loaded machine took longer than that to schedule
+                            // the attempt that was supposed to answer instantly,
+                            // and the run failed having never run the step late.
+                            .timeout(Duration.ofMillis(800))
                             .step(
                                     "flaky",
                                     (String in, StepContext ctx) -> {

@@ -24,6 +24,53 @@ All notable changes to Tandem are documented here. The format follows
   the definition, would call it `RESUMABLE`; and outputs come back in the store's
   encoded form, since decoding needs the codec.
 
+- **Property and adversarial tests for the on-disk log.** The existing store
+  tests work from examples. These generate the inputs nobody writes down by
+  hand, and check the log against damage rather than against usage: every string
+  survives a JSON line round trip, an encoded object never contains a raw line
+  break, a log truncated at every byte offset in turn reads back as a prefix of
+  itself, a single flipped byte costs at most the line it landed in, and
+  concurrent appends to one run all land whole. They found the four bugs below.
+
+### Fixed
+
+- **A torn log made the whole run unreadable, not just the torn line.**
+  `eventsFor` read the file with a strict UTF-8 decoder, so a crash that tore the
+  last append in the middle of a multi-byte character failed the decode of the
+  entire file, and the `UncheckedIOException` came out in place of every event
+  before the damage. Bytes are now decoded leniently, which confines the damage
+  to the line holding it, where the per-line parse already dropped it. This is
+  the case the append-only format existed to handle, and it did not handle it.
+
+- **Two different run ids could share one directory.** Sanitising replaced every
+  awkward character with `_` and appended a hash to say it had done so, but the
+  result was itself a legal run id: `"a/b"` was stored as `"a_b-17234"`, so a run
+  actually called `"a_b-17234"` appended to the first run's log and resumed from
+  its history. Names are now escaped rather than replaced, `_` included, so a
+  passed-through name never contains `_`, an escaped one always does, and the two
+  cannot meet. Ids of letters, digits, `-` and an interior `.`, which is every
+  UUID, are unaffected; ids containing `_` or an outer `.` change directory.
+
+- **Concurrent appends to one run failed for no reason to do with the run.**
+  `FileStore` records the run id beside its events on first append, checking for
+  the file and then moving one into place. Two threads appending to the same run
+  could both find it missing, and the loser's move threw
+  `FileAlreadyExistsException`, which propagated out of `append` and, because
+  store failures are deliberately fatal, took the run with it. Losing that race
+  is now ignored: the winner wrote the same id, because it is the same run.
+
+- **An unencodable character in an event stopped the run.** A lone surrogate,
+  which is what truncating a message through the middle of an emoji leaves
+  behind, was written to the log literally and UTF-8 could not encode it, so
+  `append` threw and the run died over the spelling of an error message.
+  Surrogates are now escaped like the other characters JSON cannot carry
+  literally, and decode back to exactly what went in.
+
+- **A flaky timeout test.** `aTimeoutIsRetriedLikeAnyOtherFailure` gave the
+  attempt that answers instantly a 150ms budget, which a loaded machine could
+  miss in scheduling alone; it failed roughly one full-suite run in ten. The
+  budget is now far enough above scheduling jitter to mean what it says.
+
 ## [1.1.0] - 2026-08-06
 
 ### Added
