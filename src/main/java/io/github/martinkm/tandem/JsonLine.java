@@ -146,7 +146,16 @@ final class JsonLine {
                     out.append("\\t");
                     break;
                 default:
-                    if (c < 0x20) {
+                    // Controls have no literal spelling. Surrogates are escaped
+                    // because a lone one is not a character any charset can
+                    // encode: writing it to a UTF-8 file either throws or
+                    // silently becomes a question mark, and a detail field
+                    // carries whatever an exception message happened to hold,
+                    // including a message someone truncated through the middle
+                    // of an emoji. Escaped, it is four hex digits that decode
+                    // back to exactly the char that went in, and a well-formed
+                    // pair still round-trips as a pair.
+                    if (c < 0x20 || Character.isSurrogate(c)) {
                         out.append(String.format("\\u%04x", (int) c));
                     } else {
                         out.append(c);

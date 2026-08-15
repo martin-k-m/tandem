@@ -68,13 +68,20 @@ src/main/java/io/github/martinkm/tandem/
   Swallowing it strands whoever asked the thread to stop.
 - **Step names key the recorded outputs**, so duplicates are rejected at build
   time or one step would replay another's result.
-- **`FileStore` sanitises names into file names, on reads as well as writes.**
-  It used to sanitise only on the way in, so a run id containing anything
-  outside `[A-Za-z0-9._-]` wrote its events to one directory and read them from
-  another: `eventsFor` came back empty, the engine called the run fresh, and
-  every recorded step ran again. `../` must not escape the root, for run ids as
-  well as step names, and two ids that flatten to the same characters must not
-  share a directory. There are tests for all three.
+- **`FileStore` escapes names into file names, on reads as well as writes.**
+  It used to escape only on the way in, so a run id containing anything outside
+  `[A-Za-z0-9._-]` wrote its events to one directory and read them from another:
+  `eventsFor` came back empty, the engine called the run fresh, and every
+  recorded step ran again. `../` must not escape the root, for run ids as well as
+  step names, and two distinct ids must never share a directory. The escaping is
+  reversible for that reason: `_` plus four hex digits for anything that cannot
+  go in a file name, `_` included, so an untouched name never contains `_` and an
+  escaped one always does. Replacing characters and appending a hash instead was
+  not injective, because the escaped spelling was itself a legal id.
+- **A damaged log costs the damaged line and nothing else.** Both halves matter:
+  bytes are decoded leniently, or a torn multi-byte character fails the whole
+  file, and each line is parsed inside its own try, or one bad line ends the
+  read. There are property tests for both.
 - **`Scheduler.every` uses fixed delay, not fixed rate.** Fixed rate turns a slow
   run into a stampede.
 
