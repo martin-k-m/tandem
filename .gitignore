@@ -11,3 +11,7 @@ dependency-reduced-pom.xml
 
 # Tandem's own file store, when run from a checkout
 .tandem/
+
+# The benchmark's toolchain and build output, both fetched or produced on demand
+bench/.jdk/
+bench/.classes/

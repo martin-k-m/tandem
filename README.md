@@ -168,6 +168,40 @@ be, and an outcome the log cannot settle is surfaced instead of guessed.** The
 residual window, and what each store does to it, is in
 [docs/durability.md](docs/durability.md).
 
+## Delivery guarantees
+
+**Tandem is at-least-once. It is not exactly-once, and your steps still need to
+be idempotent.**
+
+That is the claim this kind of library is most often wrong about, so it is
+settled here by demonstration rather than by prose.
+[`DeliverySemanticsTest`](src/test/java/io/github/martinkm/tandem/DeliverySemanticsTest.java)
+crashes for real: a child JVM performs a side effect and then calls
+`Runtime.halt`, which ends the process immediately, with no shutdown hooks and
+nothing flushed that the runtime had not already written. The parent then
+recovers from the same store directory and counts how many times the side effect
+actually happened.
+
+| What happens | Times the side effect happened |
+| :-- | :-- |
+| Step **without** a `Codec`, crash just after the side effect | **twice** |
+| Step **with** a `Codec`, crash just after the side effect | **once**, and the resume stops with `StepInDoubtException` |
+| ...then you call `confirmCompleted` | **once**, and the run finishes |
+| ...then you call `confirmNotCompleted` | **twice**, because that is what you asked for |
+| `run()` called again with a run id that already **finished** | **twice** |
+
+Read the last row twice. No crash is involved: passing a finished run's id back
+to `run` resumes it, and resuming repeats every step that has no codec. Only
+`resume(RecoverableRun)` refuses a completed run, because only it is handed the
+classification that says so.
+
+What Tandem gives you is narrower than exactly-once and more useful than
+nothing: **a step you declared recorded is never repeated silently, and the
+cases the log cannot settle become a question instead of a guess.** Getting from
+there to an effect that happens exactly once is your side of the contract, and
+Tandem hands you a stable idempotency key to do it with:
+`StepContext.runId()` plus `stepName()`.
+
 ## Documentation
 
 | Document | What it covers |
@@ -175,6 +209,9 @@ residual window, and what each store does to it, is in
 | [docs/install.md](docs/install.md) | Consuming the package from GitHub Packages |
 | [docs/workflows.md](docs/workflows.md) | Defining steps, retries and compensation |
 | [docs/durability.md](docs/durability.md) | Stores, codecs, and resuming a run |
+| [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | What it costs, on a named machine, with the scripts to re-run it |
+| [docs/BUGS.md](docs/BUGS.md) | Defects found and fixed, with the test that caught each one |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | What was chosen, against what, and what it costs |
 | [docs/roadmap.md](docs/roadmap.md) | What is not built |
 
 ## Development
@@ -182,10 +219,14 @@ residual window, and what each store does to it, is in
 ```sh
 mvn verify          # tests, plus the sources and javadoc jars
 mvn test
+bench/run.sh        # the benchmarks, no Maven and no JDK on the path required
 ```
 
 Java 17 or newer. CI builds on 17 and 21 and fails if a runtime dependency ever
-appears.
+appears. `bench/run.sh` prints the machine it ran on alongside its results and
+fetches a portable JDK into `bench/.jdk` if it cannot find one; the numbers it
+produced for [docs/BENCHMARKS.md](docs/BENCHMARKS.md) are committed verbatim in
+[bench/results.txt](bench/results.txt).
 
 ## License
 

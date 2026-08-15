@@ -91,23 +91,49 @@ class SchedulerTest {
         }
     }
 
+    /**
+     * The property is that {@code close} stops <em>further</em> runs, which is
+     * not the same as stopping instantly: {@code close} calls
+     * {@code shutdownNow}, and that interrupts a firing already in flight rather
+     * than waiting for it. So the count is sampled after a settling pause, and
+     * what is asserted is that it does not move again.
+     *
+     * <p>This used to sleep 30ms, close, and sample immediately. Both halves
+     * were wrong on a machine under load. The schedule had often not fired at
+     * all in 30ms, so the test proved nothing; and the sample taken the instant
+     * close returned could still be overtaken by the firing that was already
+     * running, which is the assertion that actually failed:
+     * {@code expected: <0> but was: <1>}. Waiting on a latch for proof that the
+     * schedule is live, which is what every other test in this class does,
+     * removes both.
+     */
     @Test
     void closingAnOwnedSchedulerStopsFurtherRuns() throws Exception {
         AtomicInteger runs = new AtomicInteger();
+        CountDownLatch firedTwice = new CountDownLatch(2);
         Workflow<String, String> workflow =
                 Workflow.<String>named("counted")
                         .step("tick", (String in, StepContext ctx) -> {
                             runs.incrementAndGet();
+                            firedTwice.countDown();
                             return in;
                         })
                         .build();
 
         Scheduler scheduler = new Scheduler(engine());
         scheduler.every(workflow, "go", Duration.ofMillis(5));
-        Thread.sleep(30);
+
+        assertTrue(
+                firedTwice.await(10, TimeUnit.SECONDS),
+                "the schedule never started firing, so close() was not tested");
+
         scheduler.close();
+        // Long enough for a firing interrupted by shutdownNow to finish
+        // incrementing, and many times the 5ms period, so a schedule that was
+        // still live would be caught here rather than after the sample.
+        Thread.sleep(200);
         int afterClose = runs.get();
-        Thread.sleep(50);
+        Thread.sleep(200);
 
         assertEquals(afterClose, runs.get(), "the schedule kept firing after close()");
     }
