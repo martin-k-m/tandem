@@ -73,14 +73,9 @@ public final class FileStore implements WorkflowStore {
         }
         List<WorkflowEvent> events = new ArrayList<>();
         try {
-            // Decoded leniently, not with Files.readAllLines. A crash can tear
-            // the last append in the middle of a multi-byte character, and a
-            // strict decoder rejects the file rather than the line: one torn
-            // byte sequence at the end made every event before it unreadable
-            // too, so a run that was almost entirely recorded could not be
-            // recovered at all. new String replaces what it cannot decode, which
-            // leaves the damage inside the line it belongs to, where the parse
-            // below drops it.
+            // Decoded leniently, not with Files.readAllLines: a crash can tear
+            // the last append mid-character, and a strict decoder rejects the
+            // whole file rather than the one damaged line. See docs/BUGS.md 1.
             String text = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
             for (String line : text.split("\\R")) {
                 if (line.isBlank()) {
@@ -218,13 +213,10 @@ public final class FileStore implements WorkflowStore {
         Path temporary = Files.createTempFile(directory, "id", ".tmp");
         try {
             Files.writeString(temporary, runId, StandardCharsets.UTF_8);
-            // Not REPLACE_EXISTING. The existence check above and this move are
-            // two steps, so two threads appending to one run can both find the
-            // file missing and both try to create it. Failing the move is how
-            // the loser is told, and losing is not an error: whoever won wrote
-            // the same id, because it is the same run. This used to replace and
-            // propagate instead, and the second thread's append died with an IO
-            // error that had nothing to do with its event.
+            // Not REPLACE_EXISTING. The check above and this move are two steps,
+            // so two threads appending to one run can both try to create it.
+            // Failing the move is how the loser is told, and losing is not an
+            // error: the winner wrote the same id. See docs/BUGS.md 3.
             Files.move(temporary, file);
         } catch (java.nio.file.FileAlreadyExistsException lostTheRace) {
             // Someone else recorded it first, with the same content.
