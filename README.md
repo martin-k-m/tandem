@@ -102,8 +102,8 @@ inspector.describe("order-4417").ifPresent(run -> {
 There is a command line over it, pointed at a `FileStore` directory:
 
 ```sh
-java -cp tandem.jar io.github.martinkm.tandem.InspectorCli list .tandem
-java -cp tandem.jar io.github.martinkm.tandem.InspectorCli show .tandem order-4417
+java -cp target/tandem-1.1.0.jar io.github.martinkm.tandem.InspectorCli list .tandem
+java -cp target/tandem-1.1.0.jar io.github.martinkm.tandem.InspectorCli show .tandem order-4417
 ```
 
 Two limits are worth stating. Working without the definition, the inspector
