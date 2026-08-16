@@ -1,0 +1,75 @@
+# Tandem benchmark run
+
+date:        2026-08-15T14:01:17Z (UTC)
+git commit:  f793748
+git branch:  harden/evidence
+uname:       MINGW64_NT-10.0-26200 3.6.9-b4195d69.x86_64 x86_64
+
+## JDK
+  openjdk version "21.0.12" 2026-07-21 LTS
+  OpenJDK Runtime Environment Temurin-21.0.12+8 (build 21.0.12+8-LTS)
+  OpenJDK 64-Bit Server VM Temurin-21.0.12+8 (build 21.0.12+8-LTS, mixed mode, sharing)
+
+## Machine
+  CPU:     Intel(R) Core(TM) Ultra 9 285H
+  Cores:   16 physical, 16 logical, 2900 MHz nominal
+  OS:      Microsoft Windows 11 Pro build 26200
+  RAM:     15.43 GB total, 2.52 GB free
+  Disk:    NVMe Timetec 35TT2280GEN4P-2TB (SSD, NVMe)
+  Load:    79% CPU at start
+
+## Storage under test
+  The benchmark writes to a directory from java.io.tmpdir:
+  C:\Users\comma\AppData\Local\Temp
+  Whether that is the SSD above or a RAM disk decides the file rows entirely.
+
+## Results
+
+## append latency, one event
+warmup 2000, samples 20000
+
+| store                              | median us    | p99 us       | mean us      | ops/s (median) |
+| :---                               | ---:         | ---:         | ---:         | ---:           |
+| InMemoryStore                      |        5.500 |       32.600 |        8.554 |        181,818 |
+| FileStore (as shipped, no fsync)   |      344.300 |      714.600 |      360.397 |          2,904 |
+| SyncedFileStore (fsync per event)  |     1543.200 |     2580.300 |     1592.825 |            648 |
+
+## durable step throughput, 10 recorded steps per run
+warmup 200 runs, samples 2000 runs
+
+| store                              | median us    | p99 us       | mean us      | ops/s (median) |
+| :---                               | ---:         | ---:         | ---:         | ---:           |
+| InMemoryStore                      |       10.100 |       62.500 |       17.349 |         99,010 |
+|                                    |   -> 990,099 steps/s at the median
+| FileStore (as shipped, no fsync)   |    17926.800 |    50206.700 |    20279.793 |             56 |
+|                                    |   -> 558 steps/s at the median
+| SyncedFileStore (fsync per event)  |    59400.700 |    79373.000 |    58633.693 |             17 |
+|                                    |   -> 168 steps/s at the median
+
+## recovery time against log length
+warmup 10, samples 60 per point, FileStore (as shipped)
+
+| steps done   | events   | median ms    | p99 ms       | ms per step  |
+| :---         | :---     | ---:         | ---:         | ---:         |
+| 1            | 4        |        3.730 |        5.366 |       3.7301 |
+| 2            | 6        |        4.145 |       12.659 |       2.0723 |
+| 5            | 12       |        8.542 |       13.774 |       1.7084 |
+| 10           | 22       |       14.924 |       21.570 |       1.4924 |
+| 20           | 42       |       25.999 |       40.594 |       1.2999 |
+| 50           | 102      |       65.961 |      120.938 |       1.3192 |
+| 100          | 202      |      187.833 |      308.435 |       1.8783 |
+| 200          | 402      |      428.935 |      806.633 |       2.1447 |
+| 500          | 1002     |     1142.326 |     2430.281 |       2.2847 |
+
+## where an append's time goes
+warmup 2000, samples 20000, on an existing directory and log
+
+| store                              | median us    | p99 us       | mean us      | ops/s (median) |
+| :---                               | ---:         | ---:         | ---:         | ---:           |
+| encode the event only              |        0.800 |        1.300 |        0.834 |      1,250,000 |
+| createDirectories on an existing dir |      142.900 |      460.800 |      161.229 |          6,998 |
+| exists() on the id file            |       32.100 |      141.900 |       36.759 |         31,153 |
+| open, append one line, close       |      219.400 |      606.900 |      262.410 |          4,558 |
+| FileStore.append, all of the above |      437.100 |     1134.600 |      518.396 |          2,288 |
+
+(regenerate with: bench/run.sh)

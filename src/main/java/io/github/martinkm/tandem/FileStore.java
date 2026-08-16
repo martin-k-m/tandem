@@ -73,7 +73,11 @@ public final class FileStore implements WorkflowStore {
         }
         List<WorkflowEvent> events = new ArrayList<>();
         try {
-            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+            // Decoded leniently, not with Files.readAllLines: a crash can tear
+            // the last append mid-character, and a strict decoder rejects the
+            // whole file rather than the one damaged line. See docs/BUGS.md 1.
+            String text = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+            for (String line : text.split("\\R")) {
                 if (line.isBlank()) {
                     continue;
                 }
@@ -191,11 +195,11 @@ public final class FileStore implements WorkflowStore {
     /**
      * Writes the run id beside its events, once per run.
      *
-     * <p>{@code listRuns} has to hand back the id the caller used, and the
-     * directory name cannot give it back: sanitising replaces characters and
-     * appends a tag, and neither is reversible. So the id is recorded rather
-     * than inferred from the file name. An id that came back wrong would be read
-     * from a different directory, find no history, and be run from the start.
+     * <p>{@code listRuns} has to hand back the id the caller used. Escaping is
+     * reversible in principle, but recording the id keeps the answer a read
+     * rather than a second implementation of the escaping that has to stay in
+     * step with the first. An id that came back wrong would be read from a
+     * different directory, find no history, and be run from the start.
      *
      * <p>Written beside and moved into place, so a crash mid-write cannot leave
      * a truncated id, and only when it is missing, so an append pays one
@@ -207,8 +211,18 @@ public final class FileStore implements WorkflowStore {
             return;
         }
         Path temporary = Files.createTempFile(directory, "id", ".tmp");
-        Files.writeString(temporary, runId, StandardCharsets.UTF_8);
-        Files.move(temporary, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        try {
+            Files.writeString(temporary, runId, StandardCharsets.UTF_8);
+            // Not REPLACE_EXISTING. The check above and this move are two steps,
+            // so two threads appending to one run can both try to create it.
+            // Failing the move is how the loser is told, and losing is not an
+            // error: the winner wrote the same id. See docs/BUGS.md 3.
+            Files.move(temporary, file);
+        } catch (java.nio.file.FileAlreadyExistsException lostTheRace) {
+            // Someone else recorded it first, with the same content.
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
     }
 
     /**
@@ -240,12 +254,25 @@ public final class FileStore implements WorkflowStore {
      * the run was fresh, and every recorded step ran a second time, which is
      * the exact failure durability exists to prevent.
      *
-     * <p>Replacement alone is not injective: {@code "a/b"} and {@code "a_b"}
-     * both flatten to {@code "a_b"}, and two runs sharing a directory would
-     * interleave their event logs and resume from each other. Anything that had
-     * to be replaced therefore carries a suffix derived from the original, so
-     * distinct ids stay distinct. Ids that need no replacement, which is nearly
-     * all of them, are untouched and stay readable on disk.
+     * <p>Replacing every awkward character with the same stand-in is not
+     * injective: {@code "a/b"} and {@code "a_b"} both flatten to {@code "a_b"},
+     * and two runs sharing a directory would interleave their event logs and
+     * resume from each other. So this escapes rather than replaces. A character
+     * that cannot be a file name becomes {@code _} followed by its four hex
+     * digits, which is reversible, and therefore cannot collide.
+     *
+     * <p>That only holds if {@code _} itself is escaped, which is why it is not
+     * in the pass-through set even though a file system is perfectly happy with
+     * it. It buys the property the whole scheme rests on: a name that passed
+     * through untouched contains no {@code _}, an escaped one always does, so
+     * the two can never meet. An earlier version kept {@code _} and appended a
+     * hash to escaped names instead, which left the escaped spelling of an id a
+     * legal id in its own right: passing {@code "a_b-17234"} landed in the
+     * directory belonging to {@code "a/b"}.
+     *
+     * <p>Ids made of letters, digits, {@code -} and {@code .}, which is every
+     * UUID and nearly every hand-written id, are untouched and stay readable on
+     * disk.
      */
     private static String safeName(String name) {
         StringBuilder out = new StringBuilder(name.length());
@@ -256,27 +283,22 @@ public final class FileStore implements WorkflowStore {
                             || (c >= 'A' && c <= 'Z')
                             || (c >= '0' && c <= '9')
                             || c == '-'
-                            || c == '_'
-                            || c == '.';
-            out.append(allowed ? c : '_');
+                            // A dot is fine in the middle and nowhere else. At
+                            // the front it risks spelling "." or "..", which
+                            // resolve to a directory rather than to a file. At
+                            // the end it is silently dropped by Windows, so
+                            // ".." and "." would land in one directory on one
+                            // platform and two on another.
+                            || (c == '.' && i > 0 && i < name.length() - 1);
+            if (allowed) {
+                out.append(c);
+            } else {
+                out.append('_').append(String.format("%04x", (int) c));
+            }
         }
-        // "." and ".." would resolve to a directory rather than a file.
-        String result = out.toString().replace("..", "__");
-        if (result.isBlank()) {
-            result = "unnamed";
-        }
-        return result.equals(name) ? result : result + "-" + disambiguator(name);
-    }
-
-    /**
-     * A short, stable tag for an original name, so two names that sanitise to
-     * the same characters do not end up in the same directory.
-     *
-     * <p>{@link String#hashCode} rather than a digest: this only has to separate
-     * names, not resist anyone choosing them, and a digest would mean a
-     * MessageDigest lookup every time a path is built.
-     */
-    private static String disambiguator(String name) {
-        return Integer.toHexString(name.hashCode() & 0xFFFFFFF);
+        // An escape is always _ and four digits, so a bare _ is a spelling
+        // nothing else produces, which makes it a safe stand-in for the one
+        // name that would otherwise come out empty.
+        return out.isEmpty() ? "_" : out.toString();
     }
 }

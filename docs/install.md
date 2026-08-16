@@ -22,7 +22,7 @@ Add the repository and the dependency:
   <dependency>
     <groupId>io.github.martinkm</groupId>
     <artifactId>tandem</artifactId>
-    <version>0.1.0</version>
+    <version>1.1.0</version>
   </dependency>
 </dependencies>
 ```
@@ -58,7 +58,7 @@ repositories {
 }
 
 dependencies {
-    implementation("io.github.martinkm:tandem:0.1.0")
+    implementation("io.github.martinkm:tandem:1.1.0")
 }
 ```
 

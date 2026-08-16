@@ -24,6 +24,92 @@ All notable changes to Tandem are documented here. The format follows
   the definition, would call it `RESUMABLE`; and outputs come back in the store's
   encoded form, since decoding needs the codec.
 
+- **Property and adversarial tests for the on-disk log.** The existing store
+  tests work from examples. These generate the inputs nobody writes down by
+  hand, and check the log against damage rather than against usage: every string
+  survives a JSON line round trip, an encoded object never contains a raw line
+  break, a log truncated at every byte offset in turn reads back as a prefix of
+  itself, a single flipped byte costs at most the line it landed in, and
+  concurrent appends to one run all land whole. They found the four bugs below.
+
+- **A test that settles the delivery semantics with a real crash.**
+  `DeliverySemanticsTest` forks a child JVM which performs a side effect and then
+  calls `Runtime.halt`, ending the process with no shutdown hooks and nothing
+  flushed that the runtime had not already written. The parent recovers from the
+  same store directory and counts how many times the side effect happened. It
+  establishes, by demonstration rather than by prose, that a step without a
+  `Codec` runs again after a crash, that a step with one stops the resume with
+  `StepInDoubtException` instead of repeating, that both `confirmCompleted` and
+  `confirmNotCompleted` are reachable from there, and that passing a finished
+  run's id back to `run` repeats every step without a codec.
+
+- **`docs/BENCHMARKS.md`, and `bench/` to regenerate it.** `bench/run.sh` prints
+  the machine it ran on next to its results and needs neither Maven nor a JDK on
+  the path, fetching a portable Temurin into `bench/.jdk` if it has to. It
+  measures append latency, durable step throughput, recovery time against log
+  length, and a breakdown of where an append's time goes. Median and p99
+  throughout, the harness stated plainly as not being JMH, and the raw output of
+  the documented run committed as `bench/results.txt`.
+
+- **`docs/BUGS.md` and `docs/DECISIONS.md`.** Every defect found so far with the
+  test that caught it and the commit that fixed it, and the design choices with
+  the alternatives they beat and the costs they still carry.
+
+- **A nightly workflow.** The pull request build runs the suite once, which
+  cannot find a test that fails one run in ten, and this project has now had two
+  of those. The nightly runs the suite ten times across Java 17 and 21, and
+  smoke tests the benchmark harness.
+
+### Fixed
+
+- **A torn log made the whole run unreadable, not just the torn line.**
+  `eventsFor` read the file with a strict UTF-8 decoder, so a crash that tore the
+  last append in the middle of a multi-byte character failed the decode of the
+  entire file, and the `UncheckedIOException` came out in place of every event
+  before the damage. Bytes are now decoded leniently, which confines the damage
+  to the line holding it, where the per-line parse already dropped it. This is
+  the case the append-only format existed to handle, and it did not handle it.
+
+- **Two different run ids could share one directory.** Sanitising replaced every
+  awkward character with `_` and appended a hash to say it had done so, but the
+  result was itself a legal run id: `"a/b"` was stored as `"a_b-17234"`, so a run
+  actually called `"a_b-17234"` appended to the first run's log and resumed from
+  its history. Names are now escaped rather than replaced, `_` included, so a
+  passed-through name never contains `_`, an escaped one always does, and the two
+  cannot meet. Ids of letters, digits, `-` and an interior `.`, which is every
+  UUID, are unaffected; ids containing `_` or an outer `.` change directory.
+
+- **Concurrent appends to one run failed for no reason to do with the run.**
+  `FileStore` records the run id beside its events on first append, checking for
+  the file and then moving one into place. Two threads appending to the same run
+  could both find it missing, and the loser's move threw
+  `FileAlreadyExistsException`, which propagated out of `append` and, because
+  store failures are deliberately fatal, took the run with it. Losing that race
+  is now ignored: the winner wrote the same id, because it is the same run.
+
+- **An unencodable character in an event stopped the run.** A lone surrogate,
+  which is what truncating a message through the middle of an emoji leaves
+  behind, was written to the log literally and UTF-8 could not encode it, so
+  `append` threw and the run died over the spelling of an error message.
+  Surrogates are now escaped like the other characters JSON cannot carry
+  literally, and decode back to exactly what went in.
+
+- **A flaky timeout test.** `aTimeoutIsRetriedLikeAnyOtherFailure` gave the
+  attempt that answers instantly a 150ms budget, which a loaded machine could
+  miss in scheduling alone; it failed roughly one full-suite run in ten. The
+  budget is now far enough above scheduling jitter to mean what it says.
+
+- **A second flaky test, and a worse one.**
+  `SchedulerTest.closingAnOwnedSchedulerStopsFurtherRuns` slept 30ms, closed the
+  scheduler, and sampled the run counter the instant `close` returned. On a
+  loaded machine the schedule had often not fired at all in those 30ms, so the
+  test proved nothing about `close`, and the sample was then overtaken by the
+  firing already in flight, since `close` calls `shutdownNow`, which interrupts
+  rather than waits. It failed 15 of 15 runs under load having passed cleanly an
+  hour earlier. It now waits on a latch for proof the schedule is live, as every
+  other test in the file does, and lets an interrupted firing settle before
+  sampling.
+
 ## [1.1.0] - 2026-08-06
 
 ### Added
