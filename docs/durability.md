@@ -182,9 +182,14 @@ payment provider whether the charge landed.
 ### Run ids survive the round trip
 
 `listRuns` gives back the id you used, not the directory name. `FileStore`
-sanitises an id into a file name and that is not reversible, so the id is
-recorded rather than inferred. Two ids that sanitise to the same characters stay
-separate runs.
+escapes an id into a file name and records the id beside the events, so the
+answer is a read rather than a second implementation of the escaping.
+
+The escaping is reversible, which is the point: a character that cannot go in a
+file name becomes `_` and its four hex digits, and `_` is escaped too, so a name
+that passed through untouched never contains one and an escaped name always
+does. Distinct ids therefore get distinct directories, and ids made of letters,
+digits, `-` and an interior `.` stay readable on disk.
 
 ### It lists what the store holds
 

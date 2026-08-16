@@ -1,0 +1,66 @@
+name: Nightly
+
+# The pull request build runs the suite once, which is the right thing to gate a
+# merge on. It is not enough to find a test that fails one run in ten, and this
+# project has had two of those: StepTimeoutTest and SchedulerTest, both recorded
+# in docs/BUGS.md. Both were timing assumptions that held on an idle machine and
+# broke on a loaded one, so the way to catch the next one is repetition on a
+# runner nobody is keeping quiet.
+
+on:
+  schedule:
+    # 03:17 UTC. Not on the hour, because everybody schedules on the hour and
+    # the runner queue shows it.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  flake-hunt:
+    name: the suite, ${{ matrix.run }} of 5, Java ${{ matrix.java }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21']
+        run: [1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      # Ten executions of the suite per night across the matrix. A test that
+      # fails one run in ten shows up within a couple of days rather than
+      # whenever somebody happens to notice.
+      - name: Test
+        run: mvn --batch-mode --no-transfer-progress test
+
+  benchmarks:
+    name: the benchmark harness still runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # This is a smoke test of bench/run.sh, not a measurement. A shared CI
+      # runner has neither a known machine nor an idle one, and docs/BENCHMARKS.md
+      # is explicit that every figure in it comes from a named machine. Nothing
+      # produced here should ever be copied into that document.
+      - name: Run the benchmarks
+        run: bench/run.sh > bench-ci.txt
+
+      - name: Show the output
+        run: cat bench-ci.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-output-not-for-quoting
+          path: bench-ci.txt
+          retention-days: 14
