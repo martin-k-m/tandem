@@ -5,7 +5,7 @@ claim rather than take my word for it. Every one of them has a commit and a
 regression test, and I confirmed each test fails with only its fix reverted.
 
 I keep this file because the bugs are the most interesting thing about the
-project. Three of the nine below are the same failure wearing different clothes:
+project. Four of the ten below are the same failure wearing different clothes:
 **work that already happened happens again after a restart**, which is the one
 thing a durable workflow engine exists to prevent. Three more are the store
 damaging or losing what it was given: a log that destroyed more of itself than
@@ -379,14 +379,60 @@ counts how many times the side effect happened.
 | Step with a `Codec`, crash after the side effect | **1.** The resume stops with `StepInDoubtException`. |
 | ...then `confirmCompleted` | **1.** The run finishes without repeating the step. |
 | ...then `confirmNotCompleted` | **2.** The step runs again, because you asked. |
-| Completed run id passed to `run()` again, no crash involved | **2.** See below. |
+| Completed run id passed to `run()` again, no crash involved | **1.** It is refused. See bug 10. |
 
-That last row is the sharp edge I would most expect someone to cut themselves
-on, and it needs no crash at all. `engine.run(workflow, input, someFinishedRunId)`
-resumes that run, and resuming repeats every step without a codec. Only
-`engine.resume(RecoverableRun)` refuses a completed run, because only it was
-handed the classification that says the run is finished. It is covered by
-`DeliverySemanticsTest.rerunningACompletedRunIdRepeatsItsUnrecordedSteps`.
+That last row used to read **2**, and it is now bug 10 below. It is covered by
+`DeliverySemanticsTest.rerunningACompletedRunIdIsRefusedRatherThanRepeated`.
+
+## Found by reading the delivery table
+
+### 10. `run()` with a finished run id resumed it and repeated its unrecorded steps
+
+**Symptom.** `engine.run(workflow, input, someFinishedRunId)` resumed a run that
+had already succeeded, and resuming re-executes every step that has no codec. No
+crash was involved. The side effect happened a second time on a run that was
+complete, correct and finished.
+
+**Root cause.** `run` decided what to do from one question, "does this id have
+history", and history is not the same question as "is this run still going".
+`resume(RecoverableRun)` asked the second one, because `RecoverableRun` carries
+the classification, and refused a `COMPLETED` run. `run` had the same
+information available in the log it had already read, and did not look at it.
+
+**Why it stayed.** It was known and written down rather than fixed: it was the
+last row of the README's delivery table, a paragraph of this file, and a passing
+test named `rerunningACompletedRunIdRepeatsItsUnrecordedSteps`. Documenting a
+duplicate side effect is not the same as not having one, and a test that pins
+the wrong behaviour makes it look decided.
+
+**Fix.** The engine already builds a `RunLog` before it does anything else, and
+that log knows how the last attempt ended:
+
+```java
+RunLog history = new RunLog(store.eventsFor(runId));
+boolean resuming = !history.isEmpty();
+if (history.ending() == EventType.RUN_SUCCEEDED) {
+    throw completed(runId);
+}
+```
+
+Both entry points now raise the same `TandemException`, which is
+`refuseCompleted`'s message, shared rather than written twice.
+
+**Regression test.**
+`DeliverySemanticsTest.rerunningACompletedRunIdIsRefusedRatherThanRepeated`. It
+runs a workflow with an unrecorded step to completion, calls `run` again with
+the same id, and asserts both that it throws and that the side effect count is
+still 1. Reverting only `WorkflowEngine.java` makes it fail with
+`java.lang.AssertionError: expected a TandemException`, at 5 tests passing and 1
+failing in that class.
+
+**What it broke, which is the interesting part.** The recovery benchmark built
+its resumable run by executing a run to completion and then re-running the same
+id against a definition with one more step. That only worked because of this
+bug, and the benchmark started failing the moment it was fixed. It now records
+its steps and then fails one, which is what a run waiting to be resumed actually
+looks like.
 
 ## How to check any of this
 
@@ -395,6 +441,8 @@ mvn test                                              # the whole suite
 mvn test -Dtest=TandemDurabilityPropertyTest          # bugs 1 to 4
 mvn test -Dtest=DeliverySemanticsTest                 # the delivery semantics
 mvn test -Dtest=StoreTest,WorkflowEngineTest          # bugs 5 and 6
+mvn test -Dtest=FileStoreCacheTest                    # the run directory cache
+mvn test -Dtest=FileStoreSyncTest                     # the fsync policy
 ```
 
 To confirm a fix is really what makes its test pass, revert the one file named

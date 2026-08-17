@@ -188,12 +188,12 @@ actually happened.
 | Step **with** a `Codec`, crash just after the side effect | **once**, and the resume stops with `StepInDoubtException` |
 | ...then you call `confirmCompleted` | **once**, and the run finishes |
 | ...then you call `confirmNotCompleted` | **twice**, because that is what you asked for |
-| `run()` called again with a run id that already **finished** | **twice** |
+| `run()` called again with a run id that already **finished** | **never**, it is refused |
 
-Read the last row twice. No crash is involved: passing a finished run's id back
-to `run` resumes it, and resuming repeats every step that has no codec. Only
-`resume(RecoverableRun)` refuses a completed run, because only it is handed the
-classification that says so.
+That last row used to read *twice*: passing a finished run's id back to `run`
+resumed it, and resuming repeats every step that has no codec. Both entry points
+now refuse a run whose log says it succeeded, which is
+[bug 10](docs/BUGS.md#10-run-with-a-finished-run-id-resumed-it-and-repeated-its-unrecorded-steps).
 
 What Tandem gives you is narrower than exactly-once and more useful than
 nothing: **a step you declared recorded is never repeated silently, and the

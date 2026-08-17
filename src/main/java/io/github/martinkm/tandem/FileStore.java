@@ -2,6 +2,8 @@ package io.github.martinkm.tandem;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -14,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Writes the log, the run's input and its step outputs under a directory, so a
@@ -32,16 +35,53 @@ import java.util.Optional;
  * rewrite can lose the whole history, while a torn append loses only the last
  * line, and the reader skips lines it cannot parse.
  *
- * <p>Durability is at the level the filesystem gives; there is no fsync per
- * event. A machine losing power may lose the last few events. That is the right
- * trade for a workflow log and the wrong one for a ledger.
+ * <p>The caller picks how durable a write is, with {@link Durability}. The
+ * default is {@link Durability#OS_BUFFERED}, which hands bytes to the operating
+ * system and forces nothing: a process crash loses nothing, a power cut can lose
+ * the last few events. {@link Durability#SYNC_ON_EVERY_EVENT} forces each event
+ * and each step output to the device before returning, and costs several times
+ * the throughput. Which to pick, and what it costs, is
+ * docs/DECISIONS.md 4.
  */
 public final class FileStore implements WorkflowStore {
 
+    /** How hard a write is pushed before {@code append} returns. */
+    public enum Durability {
+        /**
+         * Written and handed to the operating system. Survives a process crash,
+         * not a power cut.
+         */
+        OS_BUFFERED,
+        /**
+         * Forced to the device before returning, metadata included: a log whose
+         * bytes reached the device while the length covering them did not is an
+         * empty log after a power cut.
+         */
+        SYNC_ON_EVERY_EVENT
+    }
+
+    /** Where {@link #established} is cleared, so it cannot grow without bound. */
+    private static final int CACHE_LIMIT = 10_000;
+
+    /** Cleared for the process the first time a directory cannot be forced. */
+    private static volatile boolean directoryForceWorks = true;
+
     private final Path root;
+    private final Durability durability;
+    /**
+     * Run directories this instance has established. Only a cache of work that
+     * is idempotent, so clearing it costs one extra {@code createDirectories}
+     * per run and nothing else.
+     */
+    private final Map<String, Path> established = new ConcurrentHashMap<>();
 
     public FileStore(Path root) {
+        this(root, Durability.OS_BUFFERED);
+    }
+
+    public FileStore(Path root, Durability durability) {
         this.root = Objects.requireNonNull(root, "root");
+        this.durability = Objects.requireNonNull(durability, "durability");
         try {
             Files.createDirectories(root);
         } catch (IOException e) {
@@ -49,19 +89,46 @@ public final class FileStore implements WorkflowStore {
         }
     }
 
+    public Durability durability() {
+        return durability;
+    }
+
     @Override
     public void append(WorkflowEvent event) {
+        byte[] line =
+                (JsonLine.encode(event.toMap()) + System.lineSeparator())
+                        .getBytes(StandardCharsets.UTF_8);
         Path file = runDirectory(event.runId()).resolve("events.jsonl");
-        String line = JsonLine.encode(event.toMap()) + System.lineSeparator();
         try {
-            Files.writeString(
-                    file,
-                    line,
-                    StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.APPEND);
-        } catch (IOException e) {
-            throw new UncheckedIOException("could not append to " + file, e);
+            writeLine(file, line);
+        } catch (IOException firstTry) {
+            // The cache says the directory exists and something outside this
+            // process may have removed it. Re-establish once before failing, so
+            // caching cannot turn a recoverable state into a dead run.
+            established.remove(event.runId());
+            Path retry = runDirectory(event.runId()).resolve("events.jsonl");
+            try {
+                writeLine(retry, line);
+            } catch (IOException e) {
+                throw new UncheckedIOException("could not append to " + retry, e);
+            }
+        }
+    }
+
+    private void writeLine(Path file, byte[] line) throws IOException {
+        if (durability == Durability.OS_BUFFERED) {
+            Files.write(
+                    file, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            return;
+        }
+        try (FileChannel channel =
+                FileChannel.open(
+                        file,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.WRITE,
+                        StandardOpenOption.APPEND)) {
+            channel.write(ByteBuffer.wrap(line));
+            channel.force(true);
         }
     }
 
@@ -132,7 +199,7 @@ public final class FileStore implements WorkflowStore {
             // Beside, then move, for the same reason an output is written that
             // way: a reader must not see half a value.
             Path temporary = Files.createTempFile(directory, "input", ".tmp");
-            Files.writeString(temporary, encoded, StandardCharsets.UTF_8);
+            writeWhole(temporary, encoded);
             Files.move(
                     temporary,
                     directory.resolve("input"),
@@ -155,8 +222,11 @@ public final class FileStore implements WorkflowStore {
             Path file = directory.resolve(safeName(stepName) + ".out");
             // Write beside, then move: a reader never sees a half-written output.
             Path temporary = directory.resolve(safeName(stepName) + ".out.tmp");
-            Files.writeString(temporary, encoded, StandardCharsets.UTF_8);
+            writeWhole(temporary, encoded);
             Files.move(temporary, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            if (durability == Durability.SYNC_ON_EVERY_EVENT) {
+                forceDirectory(directory);
+            }
         } catch (IOException e) {
             throw new UncheckedIOException("could not save output for " + stepName, e);
         }
@@ -170,6 +240,24 @@ public final class FileStore implements WorkflowStore {
                         .resolve(safeName(stepName) + ".out"));
     }
 
+    /** Writes a whole file, forced to the device when the policy says so. */
+    private void writeWhole(Path file, String content) throws IOException {
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        if (durability == Durability.OS_BUFFERED) {
+            Files.write(file, bytes);
+            return;
+        }
+        try (FileChannel channel =
+                FileChannel.open(
+                        file,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.WRITE,
+                        StandardOpenOption.TRUNCATE_EXISTING)) {
+            channel.write(ByteBuffer.wrap(bytes));
+            channel.force(true);
+        }
+    }
+
     private static Optional<String> read(Path file) {
         if (!Files.exists(file)) {
             return Optional.empty();
@@ -181,15 +269,60 @@ public final class FileStore implements WorkflowStore {
         }
     }
 
+    /**
+     * The run's directory, created and stamped with its id on first use.
+     *
+     * <p>Both of those are no-ops after a run's first event and both cost real
+     * syscalls, about 40% of an append when repeated
+     * (docs/BENCHMARKS.md), so the result is cached per run id.
+     * {@code computeIfAbsent} is what makes that safe: concurrent appends to one
+     * run establish the directory once, and a mapping is only recorded if the
+     * function returned. See docs/DECISIONS.md 5.
+     */
     private Path runDirectory(String runId) {
-        Path directory = root.resolve(safeName(runId));
-        try {
-            Files.createDirectories(directory);
-            recordId(directory, runId);
-        } catch (IOException e) {
-            throw new UncheckedIOException("could not create " + directory, e);
+        Path cached = established.get(runId);
+        if (cached != null) {
+            return cached;
         }
-        return directory;
+        if (established.size() >= CACHE_LIMIT) {
+            established.clear();
+        }
+        return established.computeIfAbsent(
+                runId,
+                id -> {
+                    Path directory = root.resolve(safeName(id));
+                    try {
+                        Files.createDirectories(directory);
+                        recordId(directory, id);
+                        if (durability == Durability.SYNC_ON_EVERY_EVENT) {
+                            forceDirectory(directory);
+                        }
+                    } catch (IOException e) {
+                        throw new UncheckedIOException("could not create " + directory, e);
+                    }
+                    return directory;
+                });
+    }
+
+    /**
+     * Forces a directory entry, so a newly created file is still there after a
+     * power cut and not just its contents.
+     *
+     * <p>Windows cannot open a directory as a channel and throws, so the first
+     * failure turns this off for the process: retrying it per write costs a
+     * failed syscall and an exception on every step, and the answer never
+     * changes within a run. Best effort by design, since failing a write over
+     * this would be worse than the residual window it leaves.
+     */
+    private static void forceDirectory(Path directory) {
+        if (!directoryForceWorks) {
+            return;
+        }
+        try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
+            channel.force(true);
+        } catch (IOException | UnsupportedOperationException notOnThisPlatform) {
+            directoryForceWorks = false;
+        }
     }
 
     /**

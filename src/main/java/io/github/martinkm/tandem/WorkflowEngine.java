@@ -94,7 +94,15 @@ public final class WorkflowEngine implements AutoCloseable {
         return run(workflow, input, UUID.randomUUID().toString());
     }
 
-    /** Run, or resume if {@code runId} already has history. */
+    /**
+     * Run, or resume if {@code runId} already has history.
+     *
+     * <p>A run whose log says it succeeded is refused rather than resumed.
+     * Resuming it would re-execute every step without a codec, which is work
+     * that already happened. See docs/BUGS.md 10.
+     *
+     * @throws TandemException if the run has already completed
+     */
     public <I, O> RunResult<O> run(Workflow<I, O> workflow, I input, String runId) {
         Objects.requireNonNull(workflow, "workflow");
         Objects.requireNonNull(runId, "runId");
@@ -105,6 +113,9 @@ public final class WorkflowEngine implements AutoCloseable {
         // moment it starts in this one.
         RunLog history = new RunLog(store.eventsFor(runId));
         boolean resuming = !history.isEmpty();
+        if (history.ending() == EventType.RUN_SUCCEEDED) {
+            throw completed(runId);
+        }
 
         emit(
                 collected,
@@ -279,12 +290,16 @@ public final class WorkflowEngine implements AutoCloseable {
 
     private static void refuseCompleted(RecoverableRun<?, ?> run) {
         if (run.state() == RunState.COMPLETED) {
-            throw new TandemException(
-                    "run "
-                            + run.runId()
-                            + " already succeeded, so resuming it would run every step without a"
-                            + " codec a second time");
+            throw completed(run.runId());
         }
+    }
+
+    private static TandemException completed(String runId) {
+        return new TandemException(
+                "run "
+                        + runId
+                        + " already succeeded, so resuming it would run every step without a"
+                        + " codec a second time");
     }
 
     /**

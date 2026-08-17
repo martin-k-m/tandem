@@ -37,7 +37,8 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * <ul>
  *   <li>A step without a {@code Codec} is <b>at-least-once</b>. It is repeated
- *       after a crash, and repeated again by any later run of the same id.
+ *       after a crash. A run that already succeeded is refused rather than
+ *       resumed, so finishing cleanly is not one of the ways it repeats.
  *   <li>A step with a {@code Codec} is never repeated silently. A crash before
  *       its output was recorded stops the resume with
  *       {@link StepInDoubtException} and leaves the decision to the caller.
@@ -274,16 +275,13 @@ class DeliverySemanticsTest {
     }
 
     /**
-     * The sharp edge worth knowing: {@code run} with the id of a run that already
-     * finished resumes it, and resuming repeats every step with no codec. Only
-     * {@link WorkflowEngine#resume(RecoverableRun)} refuses a completed run,
-     * because only it was given the classification that says so.
-     *
-     * <p>Recorded here because it is the most likely way a caller gets a
-     * duplicate side effect out of Tandem without a crash being involved at all.
+     * {@code run} with the id of a run that already finished used to resume it,
+     * and resuming repeats every step with no codec. It was the one way to get a
+     * duplicate side effect out of Tandem with no crash involved. Both entry
+     * points now refuse a completed run. See docs/BUGS.md 10.
      */
     @Test
-    void rerunningACompletedRunIdRepeatsItsUnrecordedSteps(@TempDir Path root) throws Exception {
+    void rerunningACompletedRunIdIsRefusedRatherThanRepeated(@TempDir Path root) throws Exception {
         Path effects = root.resolve("effects.log");
         WorkflowEngine engine = new WorkflowEngine(new FileStore(root.resolve("store")));
         Workflow<String, String> definition = workflow(effects, false, false);
@@ -291,11 +289,14 @@ class DeliverySemanticsTest {
         assertTrue(engine.run(definition, INPUT, RUN_ID).succeeded());
         assertEquals(1, sideEffectCount(effects));
 
-        assertTrue(engine.run(definition, INPUT, RUN_ID).succeeded());
+        TandemException refused = assertThrowsTandem(() -> engine.run(definition, INPUT, RUN_ID));
+        assertTrue(
+                refused.getMessage().contains("already succeeded"),
+                "run() should refuse a completed run id, was: " + refused.getMessage());
         assertEquals(
-                2,
+                1,
                 sideEffectCount(effects),
-                "a completed run id passed to run() is resumed, and an unrecorded step repeats");
+                "the refusal must happen before anything runs a second time");
 
         RecoverableRun<String, String> found =
                 engine.recoverable(definition, RUN_ID).orElseThrow();
@@ -303,8 +304,8 @@ class DeliverySemanticsTest {
         assertNotEquals(
                 null,
                 assertThrowsTandem(() -> engine.resume(found)),
-                "resume(), which knows the run completed, refuses it");
-        assertEquals(2, sideEffectCount(effects), "the refusal ran nothing");
+                "resume(), which knows the run completed, refuses it too");
+        assertEquals(1, sideEffectCount(effects), "the refusal ran nothing");
     }
 
     private static TandemException assertThrowsTandem(Runnable action) {
