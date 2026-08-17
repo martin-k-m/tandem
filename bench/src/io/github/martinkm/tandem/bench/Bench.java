@@ -103,6 +103,7 @@ public final class Bench {
                         FileStore.Durability.SYNC_ON_EVERY_EVENT),
                 200,
                 2_000);
+        System.out.printf("%s   -> warmup %d, samples %,d for this row%n", pad(""), 200, 2_000);
     }
 
     private static void measureAppend(String label, WorkflowStore store, int warmup, int samples) {
@@ -172,6 +173,7 @@ public final class Bench {
                 scratch.resolve("run-fsync"),
                 20,
                 200);
+        System.out.printf("%s   -> warmup %d, samples %d for this row%n", pad(""), 20, 200);
     }
 
     private static void measureRuns(

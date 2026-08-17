@@ -7,30 +7,36 @@ script prints, so no figure in this document is separated from the machine that
 produced it.
 
 Read the [caveats](#what-these-numbers-are-not) before quoting anything. The
-short version: the machine was busy, absolute values move by up to 1.6x between
-runs, and the ratios are the durable part.
+short version: the machine was idle this time, the file figures reproduce within
+about 1.15x between runs, and the ratios are still the durable part.
 
 ## Environment
 
 | | |
 | :-- | :-- |
 | CPU | Intel Core Ultra 9 285H, 16 physical / 16 logical cores, 2900 MHz nominal |
-| RAM | 15.43 GB total, 2.26 GB free at the start of the run |
+| RAM | 15.43 GB total, 3.25 GB free at the start of the run |
 | OS | Windows 11 Pro, build 26200 |
 | Storage | Timetec 35TT2280GEN4P-2TB, NVMe SSD |
 | JDK | Temurin 21.0.12+8, 64-Bit Server VM, mixed mode, sharing |
 | Working directory | `C:\Users\comma\AppData\Local\Temp`, on the SSD above |
-| Idle | **No.** 80% CPU reported at the start of the run |
-| Date | 2026-08-17T20:02:21Z |
-| Commit | `6314968` plus the working tree of branch `durable-filestore` |
+| Idle | **Yes.** 6% CPU reported at the start of the run |
+| Date | 2026-08-17T21:42:15Z |
+| Commit | `e6bd123` on branch `durable-filestore` |
 
-The machine was not idle. Another workload was running throughout, which is why
-the p99 columns are wide and why the same benchmark run repeatedly gives file
-figures spread over a factor of 1.6. This is stated rather than hidden, and the
-[caveats](#what-these-numbers-are-not) say which conclusions survive it. The
-earlier recorded run, against commit `f793748`, is in this file's history; where
-a comparison with it matters below it was re-measured back to back on this
-machine rather than quoted across runs.
+This run was taken with nothing else on the machine. The previous recording was
+made while an unrelated workload held about 80% of the CPU, which is why it
+warned that the same benchmark gives file figures spread over a factor of 1.6.
+Most of that was the busy machine, but not all of it. Three idle runs were taken
+back to back. Every row of the append and breakdown tables reproduces within
+about 1.1x across them, and two rows do not: buffered step throughput came out
+at 866, 995 and 1,187 steps/s, and the first append of a run at 1159, 829 and
+865 µs. Those two are worth 1.4x on their own and are called out again in the
+[caveats](#what-these-numbers-are-not). The run recorded here is the third.
+
+The earlier recorded runs, against commits `f793748` and `6314968`, are in this
+file's history; where a comparison with one matters below it was re-measured
+back to back on this machine rather than quoted across runs.
 
 ## Reproducing
 
@@ -82,9 +88,13 @@ then a `STEP_SUCCEEDED` event. 2000 runs sampled after 200 warmup runs.
 
 | Store | Median per run | p99 per run | Mean per run | Steps/s at the median |
 | :-- | --: | --: | --: | --: |
-| `InMemoryStore` | 8.4 µs | 48.9 µs | 12.9 µs | 1,190,476 |
-| `FileStore`, `OS_BUFFERED` (the default) | 16.25 ms | 35.51 ms | 17.31 ms | **615** |
-| `FileStore`, `SYNC_ON_EVERY_EVENT` | 53.78 ms | 95.77 ms | 60.73 ms | **186** |
+| `InMemoryStore` | 6.8 µs | 63.9 µs | 12.6 µs | 1,470,588 |
+| `FileStore`, `OS_BUFFERED` (the default) | 8.42 ms | 15.81 ms | 8.71 ms | **1,187** |
+| `FileStore`, `SYNC_ON_EVERY_EVENT` | 29.64 ms | 36.49 ms | 30.05 ms | **337** |
+
+The synced row is 20 warmup and 200 samples rather than 200 and 2000, because an
+fsync per event makes two thousand runs a matter of minutes. The harness prints
+that next to the row, and used not to.
 
 ### What the disk is actually doing
 
@@ -103,23 +113,27 @@ they were not in the previous recording: the fsync used to live in a
 benchmark-only `SyncedFileStore` under `bench/`, and that class is gone now that
 the real store does the thing it was standing in for.
 
-**The durability guarantee costs about 3.3x on end-to-end step throughput and
-about 9.5x on a single append.** The throughput ratio came out at 3.3x, 4.1x and
-3.8x across three runs of that benchmark, which is the same neighbourhood as the
-3.0 to 3.3x recorded when a benchmark-only store priced it.
+**The durability guarantee costs about 3.5x on end-to-end step throughput and
+about 8.2x on a single append.** The throughput ratio came out at 2.8x, 3.2x and
+3.5x across the three idle runs, which is the same neighbourhood as the 3.0 to
+3.3x recorded when a benchmark-only store priced it, and below the 3.3x to 4.1x
+the busy machine reported. It rose across the three because the buffered row
+rose while the synced row did not, so read this as a range rather than a point.
 
-The append multiplier is larger than the 4.5x recorded earlier, and the reason is
-the other change in this pass rather than the fsync getting slower: an un-synced
-append is now about half what it was, because the run directory is established
-once per run instead of on every event, so the same fsync is being divided into
-a smaller number.
+The append multiplier is larger than the 4.5x recorded before the run directory
+was cached, and the reason is that change rather than the fsync getting slower:
+an un-synced append is now about half what it was, because the run directory is
+established once per run instead of on every event, so the same fsync is being
+divided into a smaller number. It came out at 7.9x, 7.3x and 8.2x across the
+three idle runs, against 9.5x on the busy one.
 
 One measured false start belongs here. The first version forced the run
 directory on every write, and on Windows a directory cannot be opened as a
 channel, so every step output threw an `IOException` that was caught and
 ignored. That cost real time: synced throughput measured **83 steps/s** with the
 per-write attempt, against 186 to 218 once the failure is learned once per
-process. Directory forcing is therefore attempted once and turned off for the
+process. Both of those were taken back to back on the busy machine; the idle run
+above reports 337. Directory forcing is therefore attempted once and turned off for the
 process when the platform refuses it. That is a durability difference between
 Linux and Windows and not only a speed one, and it is stated in
 [durability.md](durability.md).
@@ -132,33 +146,37 @@ samples after 2000 warmup.
 
 | Operation | Median | p99 | Mean |
 | :-- | --: | --: | --: |
-| Encode the event to a JSON line | 0.5 µs | 0.9 µs | 0.5 µs |
-| `createDirectories` on a directory that exists | 57.6 µs | 279.8 µs | 75.5 µs |
-| `exists()` on the id file | 14.0 µs | 73.0 µs | 17.9 µs |
-| Open, append one line, close | 92.4 µs | 482.8 µs | 142.6 µs |
-| `FileStore.append`, to a run already established | 99.0 µs | 480.8 µs | 155.0 µs |
-| `FileStore.append`, the first event of a run | 2243.7 µs | 5122.0 µs | 2292.2 µs |
+| Encode the event to a JSON line | 0.5 µs | 0.7 µs | 0.5 µs |
+| `createDirectories` on a directory that exists | 47.2 µs | 159.1 µs | 52.4 µs |
+| `exists()` on the id file | 12.5 µs | 35.4 µs | 13.8 µs |
+| Open, append one line, close | 63.3 µs | 192.1 µs | 72.0 µs |
+| `FileStore.append`, to a run already established | 66.6 µs | 198.1 µs | 75.4 µs |
+| `FileStore.append`, the first event of a run | 864.8 µs | 1815.5 µs | 863.9 µs |
 
 The interpretation, in order of size:
 
-1. **Encoding is free.** 0.5 µs against 99 µs is half a percent of an append.
+1. **Encoding is free.** 0.5 µs against 67 µs is under one percent of an append.
    The hand-written JSON writer is not worth a second thought, and replacing it
    with a library would not move this number.
-2. **The file operation is now nearly all of it.** 92.4 µs of 99.0 µs is the
-   open, the write and the close. An append is within about 10% of the raw file
+2. **The file operation is now nearly all of it.** 63.3 µs of 66.6 µs is the
+   open, the write and the close. An append is within about 5% of the raw file
    operation it contains. It used to be about twice it.
 3. **The 40% that was `createDirectories` plus `exists()` is gone from the
-   repeated path.** Those two rows, 57.6 and 14.0 µs, are still what they cost;
+   repeated path.** Those two rows, 47.2 and 12.5 µs, are still what they cost;
    they are simply no longer paid per event. `FileStore` establishes a run's
    directory once and caches it, which is
    [DECISIONS.md 5](DECISIONS.md#5-the-run-directory-is-established-once-per-run-and-cached).
 4. **The cost moved rather than vanished, and the last row is where it went.**
    The first event of a run pays for a new directory, the temporary id file and
-   the move, at 2.2 ms. A run of ten recorded steps pays that once against
-   twenty-one appends.
+   the move, at 0.86 ms. A run of ten recorded steps pays that once against
+   twenty-one appends. It is also the least reproducible row in the table, at
+   1159, 829 and 865 µs across the three idle runs, while no other row in it
+   moved by more than about 1.05x.
 
 The measured effect of the cache, taken back to back on this machine with only
-the store's own code changed:
+the store's own code changed. Both columns predate the idle run and were taken
+while the machine was busy, so the ratio is the part to read, not either
+absolute:
 
 | | Before | After |
 | :-- | --: | --: |
@@ -180,20 +198,20 @@ fsync row, which took 2000 samples after 200 warmup.
 
 | Store | Median | p99 | Mean | Appends/s at the median |
 | :-- | --: | --: | --: | --: |
-| `InMemoryStore` | 5.7 µs | 34.2 µs | 8.4 µs | 175,439 |
-| `FileStore`, `OS_BUFFERED` (the default) | 82.5 µs | 371.2 µs | 106.2 µs | 12,121 |
-| `FileStore`, `SYNC_ON_EVERY_EVENT` | 787.5 µs | 1508.9 µs | 818.8 µs | 1,270 |
+| `InMemoryStore` | 5.7 µs | 35.0 µs | 8.4 µs | 175,439 |
+| `FileStore`, `OS_BUFFERED` (the default) | 73.0 µs | 251.7 µs | 84.7 µs | 13,699 |
+| `FileStore`, `SYNC_ON_EVERY_EVENT` | 595.9 µs | 1041.5 µs | 628.4 µs | 1,678 |
 
-A recorded step is two appends plus an output write, so 615 steps/s against
-12,121 appends/s no longer divides as neatly as it once did: an append to an
+A recorded step is two appends plus an output write, so 1,187 steps/s against
+13,699 appends/s no longer divides as neatly as it once did: an append to an
 established run is now much cheaper than the per-step work around it, which is
 the output write, its temporary file and rename, and once per run the
 directory.
 
 `InMemoryStore` at 5.7 µs is not zero because it is synchronized and copies. It
 is there as the floor: it is what a step costs when the store is not the
-bottleneck, and it shows that at 615 steps/s essentially 100% of the time is the
-store.
+bottleneck, and it shows that at 1,187 steps/s essentially 100% of the time is
+the store.
 
 ## Recovery time against log length
 
@@ -214,21 +232,22 @@ because the failing step writes a started and a failed event of its own.
 
 | Steps already done | Events in the log | Median | p99 | Median per step |
 | --: | --: | --: | --: | --: |
-| 1 | 6 | 2.55 ms | 5.82 ms | 2.55 ms |
-| 2 | 8 | 2.65 ms | 6.86 ms | 1.33 ms |
-| 5 | 14 | 7.49 ms | 18.16 ms | 1.50 ms |
-| 10 | 24 | 14.64 ms | 19.99 ms | 1.46 ms |
-| 20 | 44 | 26.06 ms | 32.92 ms | 1.30 ms |
-| 50 | 104 | 92.19 ms | 123.70 ms | 1.84 ms |
-| 100 | 204 | 123.65 ms | 188.23 ms | 1.24 ms |
-| 200 | 404 | 197.09 ms | 340.28 ms | 0.99 ms |
-| 500 | 1004 | 447.55 ms | 740.12 ms | 0.90 ms |
+| 1 | 6 | 1.57 ms | 3.82 ms | 1.57 ms |
+| 2 | 8 | 1.64 ms | 2.85 ms | 0.82 ms |
+| 5 | 14 | 5.31 ms | 9.84 ms | 1.06 ms |
+| 10 | 24 | 8.46 ms | 14.69 ms | 0.85 ms |
+| 20 | 44 | 15.23 ms | 34.91 ms | 0.76 ms |
+| 50 | 104 | 87.74 ms | 101.17 ms | 1.75 ms |
+| 100 | 204 | 120.05 ms | 144.26 ms | 1.20 ms |
+| 200 | 404 | 198.85 ms | 218.59 ms | 0.99 ms |
+| 500 | 1004 | 404.59 ms | 448.35 ms | 0.81 ms |
 
-**Recovery is linear in log length**, at roughly 0.9 to 1.8 ms per already
-completed step, on top of a fixed cost of a couple of milliseconds. A run that
-got 500 steps in takes about half a second to pick back up. The rightmost column
-wandering between 0.9 and 1.8 ms is machine noise, not shape: the 50 step point
-is the outlier and it sits above both its neighbours.
+**Recovery is linear in log length**, at roughly 0.8 to 1.8 ms per already
+completed step, on top of a fixed cost of a millisecond or two. A run that got
+500 steps in takes about four tenths of a second to pick back up. The rightmost
+column wandering between 0.8 and 1.8 ms is machine noise, not shape: the 50 step
+point is the outlier and it sits above both its neighbours, in all three idle
+runs.
 
 The shape is the useful part, and it is linear rather than quadratic because
 nothing rescans. `eventsFor` reads the log once, `RunLog` folds it in one pass,
@@ -237,8 +256,9 @@ is one file read per completed step, and file reads on this machine cost about
 what the table says.
 
 The blunt observation: **replaying a recorded step costs about as much as
-executing a trivial one.** A step is 1.6 ms at 615 steps/s, and a replay is 0.9
-to 1.8 ms. Recording a step does not make resuming it cheap in wall clock terms.
+executing a trivial one.** A step is 0.84 ms at 1,187 steps/s, and a replay is
+0.8 to 1.8 ms. Recording a step does not make resuming it cheap in wall clock
+terms.
 What it buys is that the side effect does not happen again, which is the entire
 point and is worth far more than the milliseconds. If your steps are real work
 against real remote systems, the replay is free by comparison. If your steps are
@@ -256,14 +276,17 @@ reason to archive completed runs.
 
 ## What these numbers are not
 
-- **Not a quiet machine.** 80% CPU from an unrelated workload throughout. The
-  p99 columns in particular measure that workload as much as they measure
-  Tandem.
-- **Not stable to their last digit.** Across the runs made for this pass,
-  buffered step throughput came out at 610, 615, 784 and 835 steps/s and synced
-  at 186, 192 and 218. Assume plus or minus 40% on any absolute figure. The
+- **A quiet machine this time, which the previous recording was not.** 6% CPU at
+  the start, against 80% before. The p99 columns are correspondingly narrower and
+  are now mostly Tandem rather than mostly the neighbours.
+- **Still not stable to their last digit.** Across the three idle runs, buffered
+  step throughput came out at 866, 995 and 1,187 steps/s and synced at 312, 312
+  and 337. Most other rows hold within about 1.1x, but that buffered row is worth
+  1.4x on its own and it rose monotonically across three consecutive runs, which
+  looks more like the file system warming than like noise. It was not chased
+  down. Assume plus or minus 20% on any absolute figure and more on that row. The
   **ratios between rows**, and the before-and-after pairs measured back to back,
-  are what the conclusions rest on.
+  are still what the conclusions rest on.
 - **Not JMH,** as set out under [Methodology](#methodology).
 - **Not cross-platform.** These are Windows 11 numbers on NTFS. File operation
   costs are the dominant term in almost every row here, and they are the term
