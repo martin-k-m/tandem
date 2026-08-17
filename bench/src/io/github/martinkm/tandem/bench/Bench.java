@@ -5,7 +5,6 @@ import io.github.martinkm.tandem.Codec;
 import io.github.martinkm.tandem.FileStore;
 import io.github.martinkm.tandem.InMemoryStore;
 import io.github.martinkm.tandem.StepContext;
-import io.github.martinkm.tandem.SyncedFileStore;
 import io.github.martinkm.tandem.Workflow;
 import io.github.martinkm.tandem.WorkflowBuilder;
 import io.github.martinkm.tandem.WorkflowEngine;
@@ -89,7 +88,7 @@ public final class Bench {
 
         measureAppend("InMemoryStore", new InMemoryStore(), warmup, samples);
         measureAppend(
-                "FileStore (as shipped, no fsync)",
+                "FileStore (OS_BUFFERED, the default)",
                 new FileStore(scratch.resolve("append-plain")),
                 warmup,
                 samples);
@@ -98,8 +97,10 @@ public final class Bench {
         // rather than hidden, because a percentile over fewer samples is a
         // weaker claim.
         measureAppend(
-                "SyncedFileStore (fsync per event)",
-                new SyncedFileStore(scratch.resolve("append-fsync")),
+                "FileStore (SYNC_ON_EVERY_EVENT)",
+                new FileStore(
+                        scratch.resolve("append-fsync"),
+                        FileStore.Durability.SYNC_ON_EVERY_EVENT),
                 200,
                 2_000);
     }
@@ -160,14 +161,14 @@ public final class Bench {
                 warmup,
                 samples);
         measureRuns(
-                "FileStore (as shipped, no fsync)",
+                "FileStore (OS_BUFFERED, the default)",
                 FileStore::new,
                 scratch.resolve("run-plain"),
                 warmup,
                 samples);
         measureRuns(
-                "SyncedFileStore (fsync per event)",
-                SyncedFileStore::new,
+                "FileStore (SYNC_ON_EVERY_EVENT)",
+                root -> new FileStore(root, FileStore.Durability.SYNC_ON_EVERY_EVENT),
                 scratch.resolve("run-fsync"),
                 20,
                 200);
@@ -244,8 +245,13 @@ public final class Bench {
                 String runId = "recovered";
 
                 // Not timed: getting the store into the state a crash would
-                // have left it in.
-                engine.run(chain("bench-recovery", length), "in", runId);
+                // have left it in. The run records `length` steps and then
+                // fails on one more, which is a resumable run. It used to be
+                // built by completing the run and resuming it against a longer
+                // definition, which only worked while run() would resume a run
+                // that had already succeeded. It no longer does, and that was
+                // the bug rather than the benchmark.
+                engine.run(failingAfter("bench-recovery", length), "in", runId);
                 int eventCount = store.eventsFor(runId).size();
 
                 WorkflowEngine restarted = new WorkflowEngine(new FileStore(root));
@@ -349,6 +355,20 @@ public final class Bench {
                     store.append(event("bench-breakdown", i));
                     return store;
                 });
+
+        // The run directory is established once and cached, so the two rows
+        // below are the two halves of that: the first append of a run pays for
+        // the directory and the id file, every later one does not. Fewer
+        // samples, because each iteration is a new directory on disk.
+        FileStore fresh = new FileStore(scratch.resolve("breakdown-fresh"));
+        timed(
+                "FileStore.append, first event of a run",
+                200,
+                2_000,
+                i -> {
+                    fresh.append(event("bench-fresh-" + i, i));
+                    return fresh;
+                });
     }
 
     /** Times {@code work} once per iteration and reports the distribution. */
@@ -386,6 +406,25 @@ public final class Bench {
                             Codec.ofString());
         }
         return builder.build();
+    }
+
+    /** {@link #chain} of {@code steps} recorded steps, then one that throws. */
+    private static Workflow<String, String> failingAfter(String name, int steps) {
+        WorkflowBuilder<String, String> builder = Workflow.<String>named(name);
+        for (int i = 0; i < steps; i++) {
+            builder =
+                    builder.step(
+                            "step-" + i,
+                            (String in, StepContext ctx) -> in.length() > 64 ? in : in + "x",
+                            Codec.ofString());
+        }
+        return builder.<String>step(
+                        "step-" + steps,
+                        (String in, StepContext ctx) -> {
+                            throw new IllegalStateException("stop here");
+                        },
+                        Codec.ofString())
+                .build();
     }
 
     private static void header() {
