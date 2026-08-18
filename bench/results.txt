@@ -1,8 +1,8 @@
 # Tandem benchmark run
 
-date:        2026-08-15T14:01:17Z (UTC)
-git commit:  f793748
-git branch:  harden/evidence
+date:        2026-08-17T21:42:15Z (UTC)
+git commit:  e6bd123
+git branch:  durable-filestore
 uname:       MINGW64_NT-10.0-26200 3.6.9-b4195d69.x86_64 x86_64
 
 ## JDK
@@ -14,9 +14,9 @@ uname:       MINGW64_NT-10.0-26200 3.6.9-b4195d69.x86_64 x86_64
   CPU:     Intel(R) Core(TM) Ultra 9 285H
   Cores:   16 physical, 16 logical, 2900 MHz nominal
   OS:      Microsoft Windows 11 Pro build 26200
-  RAM:     15.43 GB total, 2.52 GB free
+  RAM:     15.43 GB total, 3.25 GB free
   Disk:    NVMe Timetec 35TT2280GEN4P-2TB (SSD, NVMe)
-  Load:    79% CPU at start
+  Load:    6% CPU at start
 
 ## Storage under test
   The benchmark writes to a directory from java.io.tmpdir:
@@ -30,46 +30,49 @@ warmup 2000, samples 20000
 
 | store                              | median us    | p99 us       | mean us      | ops/s (median) |
 | :---                               | ---:         | ---:         | ---:         | ---:           |
-| InMemoryStore                      |        5.500 |       32.600 |        8.554 |        181,818 |
-| FileStore (as shipped, no fsync)   |      344.300 |      714.600 |      360.397 |          2,904 |
-| SyncedFileStore (fsync per event)  |     1543.200 |     2580.300 |     1592.825 |            648 |
+| InMemoryStore                      |        5.700 |       35.000 |        8.362 |        175,439 |
+| FileStore (OS_BUFFERED, the default) |       73.000 |      251.700 |       84.703 |         13,699 |
+| FileStore (SYNC_ON_EVERY_EVENT)    |      595.900 |     1041.500 |      628.423 |          1,678 |
+|                                    |   -> warmup 200, samples 2,000 for this row
 
 ## durable step throughput, 10 recorded steps per run
 warmup 200 runs, samples 2000 runs
 
 | store                              | median us    | p99 us       | mean us      | ops/s (median) |
 | :---                               | ---:         | ---:         | ---:         | ---:           |
-| InMemoryStore                      |       10.100 |       62.500 |       17.349 |         99,010 |
-|                                    |   -> 990,099 steps/s at the median
-| FileStore (as shipped, no fsync)   |    17926.800 |    50206.700 |    20279.793 |             56 |
-|                                    |   -> 558 steps/s at the median
-| SyncedFileStore (fsync per event)  |    59400.700 |    79373.000 |    58633.693 |             17 |
-|                                    |   -> 168 steps/s at the median
+| InMemoryStore                      |        6.800 |       63.900 |       12.634 |        147,059 |
+|                                    |   -> 1,470,588 steps/s at the median
+| FileStore (OS_BUFFERED, the default) |     8421.800 |    15812.000 |     8711.735 |            119 |
+|                                    |   -> 1,187 steps/s at the median
+| FileStore (SYNC_ON_EVERY_EVENT)    |    29638.100 |    36494.900 |    30053.065 |             34 |
+|                                    |   -> 337 steps/s at the median
+|                                    |   -> warmup 20, samples 200 for this row
 
 ## recovery time against log length
 warmup 10, samples 60 per point, FileStore (as shipped)
 
 | steps done   | events   | median ms    | p99 ms       | ms per step  |
 | :---         | :---     | ---:         | ---:         | ---:         |
-| 1            | 4        |        3.730 |        5.366 |       3.7301 |
-| 2            | 6        |        4.145 |       12.659 |       2.0723 |
-| 5            | 12       |        8.542 |       13.774 |       1.7084 |
-| 10           | 22       |       14.924 |       21.570 |       1.4924 |
-| 20           | 42       |       25.999 |       40.594 |       1.2999 |
-| 50           | 102      |       65.961 |      120.938 |       1.3192 |
-| 100          | 202      |      187.833 |      308.435 |       1.8783 |
-| 200          | 402      |      428.935 |      806.633 |       2.1447 |
-| 500          | 1002     |     1142.326 |     2430.281 |       2.2847 |
+| 1            | 6        |        1.566 |        3.819 |       1.5657 |
+| 2            | 8        |        1.644 |        2.853 |       0.8220 |
+| 5            | 14       |        5.311 |        9.836 |       1.0623 |
+| 10           | 24       |        8.457 |       14.692 |       0.8457 |
+| 20           | 44       |       15.230 |       34.908 |       0.7615 |
+| 50           | 104      |       87.740 |      101.174 |       1.7548 |
+| 100          | 204      |      120.054 |      144.264 |       1.2005 |
+| 200          | 404      |      198.848 |      218.591 |       0.9942 |
+| 500          | 1004     |      404.585 |      448.352 |       0.8092 |
 
 ## where an append's time goes
 warmup 2000, samples 20000, on an existing directory and log
 
 | store                              | median us    | p99 us       | mean us      | ops/s (median) |
 | :---                               | ---:         | ---:         | ---:         | ---:           |
-| encode the event only              |        0.800 |        1.300 |        0.834 |      1,250,000 |
-| createDirectories on an existing dir |      142.900 |      460.800 |      161.229 |          6,998 |
-| exists() on the id file            |       32.100 |      141.900 |       36.759 |         31,153 |
-| open, append one line, close       |      219.400 |      606.900 |      262.410 |          4,558 |
-| FileStore.append, all of the above |      437.100 |     1134.600 |      518.396 |          2,288 |
+| encode the event only              |        0.500 |        0.700 |        0.529 |      2,000,000 |
+| createDirectories on an existing dir |       47.200 |      159.100 |       52.364 |         21,186 |
+| exists() on the id file            |       12.500 |       35.400 |       13.842 |         80,000 |
+| open, append one line, close       |       63.300 |      192.100 |       72.035 |         15,798 |
+| FileStore.append, all of the above |       66.600 |      198.100 |       75.433 |         15,015 |
+| FileStore.append, first event of a run |      864.800 |     1815.500 |      863.922 |          1,156 |
 
 (regenerate with: bench/run.sh)
