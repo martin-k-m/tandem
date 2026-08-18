@@ -8,6 +8,16 @@ All notable changes to Tandem are documented here. The format follows
 
 ### Added
 
+- **`FileStore` can fsync.** It takes a `Durability`: `OS_BUFFERED`, the default
+  and what it has always done, or `SYNC_ON_EVERY_EVENT`, which forces every
+  event and every step output to the device before returning, metadata included,
+  and forces the run directory too on platforms that allow it. The guarantee used
+  to be reachable only by writing your own store, since the version that forced
+  anything lived in `bench/`. It costs about 3.3x on step throughput and about
+  9.5x on a single append, measured in docs/BENCHMARKS.md, and the choice is the
+  caller's because which failure you are buying against is a property of the
+  deployment.
+
 - **A read-only inspector.** `WorkflowInspector` reads what a store holds without
   running anything: the run ids it has, each run's classified state, and per run
   the ordered steps with their outcomes and any recorded output. It returns plain
@@ -60,7 +70,24 @@ All notable changes to Tandem are documented here. The format follows
   of those. The nightly runs the suite ten times across Java 17 and 21, and
   smoke tests the benchmark harness.
 
+### Changed
+
+- **A run's directory is established once and cached** instead of on every
+  append, which was about 40% of an append in syscalls that are no-ops after a
+  run's first event. An append to an established run went from 179.3 to 93.1 µs
+  median on the machine in docs/BENCHMARKS.md. End-to-end throughput on short
+  runs is unchanged, and that is stated there rather than dressed up. The cache
+  is dropped and rebuilt if a write fails, so a directory removed from outside
+  the process still costs one retry rather than the run.
+
+
 ### Fixed
+
+- **`run()` with the id of a run that already succeeded is refused rather than
+  resumed.** Resuming a completed run re-executes every step without a codec, so
+  the side effect happened a second time, with no crash involved. `resume` has
+  always refused this; `run` now raises the same `TandemException`. The README's
+  delivery table row that read *twice* now reads *never*.
 
 - **A torn log made the whole run unreadable, not just the torn line.**
   `eventsFor` read the file with a strict UTF-8 decoder, so a crash that tore the

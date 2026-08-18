@@ -126,9 +126,12 @@ restart and shows up in the audit trail as `confirmed out of band`.
   `confirmNotCompleted` for it.
 - An outcome the log cannot settle is **surfaced, not guessed**.
 - Detection is only as good as the store's durability at the moment
-  `STEP_STARTED` is written. `FileStore` does not fsync, so a power loss, as
-  opposed to a process crash, can lose that line and with it the doubt. A store
-  over a database that commits the event synchronously does not have that gap.
+  `STEP_STARTED` is written. `FileStore` under its default
+  `Durability.OS_BUFFERED` does not fsync, so a power loss, as opposed to a
+  process crash, can lose that line and with it the doubt.
+  `Durability.SYNC_ON_EVERY_EVENT` closes that at a measured cost, and a store
+  over a database that commits the event synchronously does not have the gap
+  either.
 - A step **without** a `Codec` is repeated after a crash with no questions
   asked, because declaring it without one is how you said that was fine.
 - None of this makes a non-idempotent remote call safe on its own. It makes the
@@ -237,10 +240,30 @@ lines it cannot parse.
 Outputs are written to a temporary file and moved into place, so a reader never
 observes a half-written value.
 
-It does not fsync per event. A machine losing power may lose the last few
-events. That is the right trade for a workflow log and the wrong one for a
-ledger; if you need the stronger guarantee, implement `WorkflowStore` over a
-database.
+How hard a write is pushed is the caller's choice:
+
+```java
+new FileStore(Path.of(".tandem"));                                  // OS_BUFFERED
+new FileStore(Path.of(".tandem"), Durability.SYNC_ON_EVERY_EVENT);  // forced
+```
+
+`OS_BUFFERED` is the default. Bytes are handed to the operating system and
+nothing is forced, so a process crash loses nothing and a machine losing power
+may lose the last few events.
+
+`SYNC_ON_EVERY_EVENT` forces every event and every step output to the device
+before the call returns, metadata included, because a log whose bytes reached
+the device while the length covering them did not is an empty log after a power
+cut. On Linux the directory entry is forced too, so a newly created log is not
+just its contents; Windows cannot open a directory as a channel, so there the
+file's own force is as far as it goes and a run's first event has a window the
+platform does not let a store close.
+
+It costs about **3.3x on end-to-end step throughput and about 9.5x on a single
+append**, measured in [BENCHMARKS.md](BENCHMARKS.md). Which to pick is
+[decision 4](DECISIONS.md#4-filestore-does-not-fsync-by-default-and-the-caller-can-say-otherwise);
+the short version is that a power cut is the only failure it changes, and if you
+need more than either offers, implement `WorkflowStore` over a database.
 
 ## Writing your own store
 

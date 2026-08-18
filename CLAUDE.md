@@ -82,6 +82,13 @@ src/main/java/io/github/martinkm/tandem/
   bytes are decoded leniently, or a torn multi-byte character fails the whole
   file, and each line is parsed inside its own try, or one bad line ends the
   read. There are property tests for both.
+- **A run whose log ends in `RUN_SUCCEEDED` is refused, by `run` as well as by
+  `resume`.** Resuming a finished run re-executes every step without a codec,
+  which is work that already happened, and it needs no crash to reach.
+- **The run directory cache is keyed by run id and dropped when a write fails.**
+  It exists because establishing the directory was 40% of an append. It has to
+  be safe under concurrent appends to one run, must never hand one run another's
+  directory, and must not turn an externally removed directory into a dead run.
 - **`Scheduler.every` uses fixed delay, not fixed rate.** Fixed rate turns a slow
   run into a stampede.
 
