@@ -40,8 +40,8 @@ When a run is stuck, `cat events.jsonl` is the first thing anybody does, and I
 was not willing to trade that for a checksum. No JSON library because a runtime
 dependency lands in the classpath of every application that uses Tandem, where
 it competes with the one they already have; the [benchmark](BENCHMARKS.md#where-the-time-goes)
-says encoding is 0.8 µs of a 437 µs append, so there was never any performance
-argument on the other side either.
+says encoding is 0.5 µs of a 66.6 µs append, under one percent of it, so there
+was never any performance argument on the other side either.
 
 **The cost, and it bit me.** "A torn append loses only the last line" was a
 property of the format that the *reader* did not actually have, because it
@@ -95,9 +95,13 @@ making the fsync always on, which is what the word "durable" normally implies.
 from the shipped jar: the store priced at 3.3x lived in `bench/`, so the only
 way to buy durability was to write your own store. Always on lost because the
 price is real and the failure it buys against is narrow. `SYNC_ON_EVERY_EVENT`
-costs about **3.3x on end-to-end step throughput and about 9.5x on a single
-append** ([BENCHMARKS.md](BENCHMARKS.md#what-the-disk-is-actually-doing)): 615
-steps/s becomes 186. A process crash, which is the failure people actually have,
+costs about **3.5x on end-to-end step throughput and about 8.2x on a single
+append** ([BENCHMARKS.md](BENCHMARKS.md#what-the-disk-is-actually-doing)): in
+the recorded run, 1,187 steps/s becomes 337. Both multipliers are a range rather
+than a point, 2.8x to 3.5x and 7.9x to 8.2x across three idle runs, and the
+figures this entry used to quote, 3.3x and 9.5x against 615 and 186 steps/s,
+came from the earlier recording taken while the machine was busy. A process
+crash, which is the failure people actually have,
 loses nothing either way, because the writes already reached the OS. Only a power
 cut or a kernel panic loses events. Defaulting to the expensive answer would
 have made every existing user pay several times over for a failure most of them
@@ -149,8 +153,11 @@ that is idempotent anyway, so the worst a clear costs is one extra
 
 **What it bought, measured.** On the same machine minutes apart, an append to an
 established run went from **179.3 µs to 93.1 µs median**, and in the breakdown
-table from 183.6 µs to 90.7 µs, which puts an append within about 10% of the raw
-open-write-close it contains rather than at twice it.
+table from 183.6 µs to 90.7 µs. Both of those were taken while the machine was
+busy, so the halving is the part to read rather than either absolute. In the
+recorded idle run the breakdown puts an append at 66.6 µs against 63.3 µs for
+the raw open-write-close it contains, so within about 5% of it rather than at
+twice it.
 
 **What it did not buy.** End-to-end step throughput barely moved: 595 steps/s
 before, 610 after, which is inside the noise on this machine. That benchmark

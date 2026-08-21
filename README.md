@@ -17,7 +17,7 @@ against a log that lets an interrupted run pick up where it stopped.
 ```java
 Workflow<Order, Receipt> checkout = Workflow.<Order>named("checkout")
         .retry(RetryPolicy.exponential(3, Duration.ofMillis(200)))
-        .step("charge", (Order order, StepContext ctx) -> payments.charge(order), Codec.ofString())
+        .step("charge", (Order toCharge, StepContext ctx) -> payments.charge(toCharge), Codec.ofString())
         .compensate((chargeId, ctx) -> payments.refund((String) chargeId))
         .step("reserve", (String chargeId, StepContext ctx) -> stock.reserve(chargeId))
         .step("receipt", (Reservation r, StepContext ctx) -> new Receipt(r))
@@ -99,7 +99,9 @@ inspector.describe("order-4417").ifPresent(run -> {
 });
 ```
 
-There is a command line over it, pointed at a `FileStore` directory:
+There is a command line over it, pointed at a `FileStore` directory. The jar it
+names is the one `mvn package` puts in `target`, so build first if you are
+running from a checkout:
 
 ```sh
 java -cp target/tandem-1.1.0.jar io.github.martinkm.tandem.InspectorCli list .tandem
@@ -223,7 +225,30 @@ bench/run.sh        # the benchmarks, no Maven and no JDK on the path required
 ```
 
 Java 17 or newer. CI builds on 17 and 21 and fails if a runtime dependency ever
-appears. `bench/run.sh` prints the machine it ran on alongside its results and
+appears.
+
+### What the tests cover
+
+115 tests across 13 classes, against 28 main classes. All 115 pass. There is no
+coverage tool wired in, so this is a count of tests and of which classes they
+name, not a line coverage figure, and it should be read as the weaker claim it
+is.
+
+Where it is thin, by class:
+
+| Class | Situation |
+| :-- | :-- |
+| `RunLog` | No test of its own. It is the fold that decides whether a run is resumable, finished or in doubt, so it is the most load-bearing untested class here. It is exercised only through `WorkflowEngine`. |
+| `WorkflowListener` | Reached in one test class. Listener failures being swallowed is a stated invariant with little direct evidence behind it. |
+| `Scheduler` | 5 tests for delayed and repeating runs, and one of them was flaky enough to get [its own bug entry](docs/BUGS.md#9-a-second-flaky-test-and-it-was-worse-than-the-first). |
+| README examples | Nothing compiles them. That is [bug 11](docs/BUGS.md#11-the-readmes-first-example-did-not-compile). |
+
+The dense end is the part the claims rest on: `FileStore`, `WorkflowEngine`,
+`Codec` and `Workflow` are each named in dozens of tests, and the durability
+behaviour has both example-based tests and
+[a property test](src/test/java/io/github/martinkm/tandem/TandemDurabilityPropertyTest.java).
+
+`bench/run.sh` prints the machine it ran on alongside its results and
 fetches a portable JDK into `bench/.jdk` if it cannot find one; the numbers it
 produced for [docs/BENCHMARKS.md](docs/BENCHMARKS.md) are committed verbatim in
 [bench/results.txt](bench/results.txt).
