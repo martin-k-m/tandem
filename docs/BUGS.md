@@ -5,13 +5,15 @@ claim rather than take my word for it. Every one of them has a commit and a
 regression test, and I confirmed each test fails with only its fix reverted.
 
 I keep this file because the bugs are the most interesting thing about the
-project. Four of the ten below are the same failure wearing different clothes:
+project. Four of the eleven below are the same failure wearing different clothes:
 **work that already happened happens again after a restart**, which is the one
 thing a durable workflow engine exists to prevent. Three more are the store
 damaging or losing what it was given: a log that destroyed more of itself than
 it had to, a run that died over the spelling of an error message, and a race
-that threw away most of a burst of concurrent events. The last three are a type
-inference trap and two flaky tests.
+that threw away most of a burst of concurrent events. The remaining four are a
+type inference trap, two flaky tests, and a README example that did not compile.
+
+Entry 11 is the only one without a regression test, and it says so.
 
 The four in the first section were found by a property test rather than by me,
 which is the reason that test exists.
@@ -433,6 +435,45 @@ id against a definition with one more step. That only worked because of this
 bug, and the benchmark started failing the moment it was fixed. It now records
 its steps and then fails one, which is what a run waiting to be resumed actually
 looks like.
+
+## Found by compiling the README
+
+### 11. The README's first example did not compile
+
+**Symptom.** The first code a stranger meets, the checkout workflow at the top of
+the README, does not compile as printed. The step lambda declared a parameter
+named `order`, and the last line of the same example passes a variable named
+`order` to `run`, so the lambda parameter shadows a local that is already in
+scope. Java does not allow that.
+
+**Root cause.** A lambda parameter may not shadow a local variable of the
+enclosing method. The snippet was written as two fragments that each read
+correctly on their own and were never compiled together. Nothing in the build
+compiles README snippets, so neither CI nor `mvn verify` had any opportunity to
+notice.
+
+**How it was caught.** I pasted the example into a file, supplied the types it
+implies (`Order`, `Receipt`, `Reservation`, and the `payments` and `stock`
+interfaces) and compiled it against `target/classes` with Temurin 21:
+
+```
+Verbatim.java:17: error: variable order is already defined in method example(Order)
+                .step("charge", (Order order, StepContext ctx) -> payments.charge(order), Codec.ofString())
+                                       ^
+1 error
+```
+
+Renaming that one parameter and changing nothing else compiles clean. This is
+the whole defect: the API is fine, the example is not.
+
+**Fix.** The lambda parameter is now `toCharge`. The rest of the example is
+unchanged and was confirmed to compile.
+
+**Regression test.** None, and that is the honest part of this entry. There is no
+mechanism that compiles README snippets, so this class of defect can come back
+the next time the example is edited. A test source that holds the README examples
+verbatim, or a doc snippet extractor wired into `mvn verify`, would close it.
+Until one exists, the example is checked by hand.
 
 ## How to check any of this
 
