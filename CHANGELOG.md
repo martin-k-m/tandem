@@ -6,6 +6,8 @@ All notable changes to Tandem are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-23
+
 ### Added
 
 - **`FileStore` can fsync.** It takes a `Durability`: `OS_BUFFERED`, the default
@@ -244,5 +246,8 @@ no parallel or branching shapes. Resuming an edited definition matches recorded
 outputs by step name and does not detect that the shape changed. See
 [docs/roadmap.md](docs/roadmap.md).
 
-[Unreleased]: https://github.com/martin-k-m/tandem/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/martin-k-m/tandem/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/martin-k-m/tandem/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/martin-k-m/tandem/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/martin-k-m/tandem/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/martin-k-m/tandem/releases/tag/v0.1.0
