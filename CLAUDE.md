@@ -111,12 +111,24 @@ src/main/java/io/github/martinkm/tandem/
 
 ## Environment note
 
-The machine this was written on has **no JDK and no Maven**, but Docker runs, so
-build in a container rather than waiting on CI:
+**This machine now has a JDK and Maven — build natively.** Measured 2026-09-19:
+Homebrew OpenJDK 21.0.12.1 and Apache Maven 3.9.16 are both on `PATH`, and
+`mvn -B verify` runs green here in **6.6 s, 115 tests, 0 failures**.
+
+```sh
+mvn -B verify
+```
+
+This note previously said the machine had no JDK and no Maven and told you to
+use a container. That is no longer true; the container line is kept only as the
+fallback if a toolchain problem makes the native build untrustworthy:
 
 ```sh
 docker run --rm -v "$(pwd):/w" -w /w maven:3.9-eclipse-temurin-17 mvn -B verify
 ```
 
-That gives real test counts in about a minute. Use `-q` sparingly: it hides the
-per-class `Tests run:` lines that tell you a suite actually executed.
+One caveat is unchanged: `JAVA_HOME` is **not** set on this machine, so anything
+that reads it rather than `PATH` will need it exported.
+
+Use `-q` sparingly: it hides the per-class `Tests run:` lines that tell you a
+suite actually executed.
