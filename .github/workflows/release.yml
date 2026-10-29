@@ -19,7 +19,7 @@ jobs:
 
       # server-id must match the <repository><id> in the pom's
       # distributionManagement, or Maven will not find the credentials.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
