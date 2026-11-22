@@ -12,7 +12,7 @@ against 0.1 works in 0.1.
 | Distributed coordination | Planned | Several machines cooperating on one run needs a worker protocol and leases. Large, and the reason the scheduler is honest about being in-process. |
 | Leader election for schedules | Planned | Without it, two application instances each fire the same recurring workflow. |
 | Persistent timers | Planned | A delay that survives a restart, rather than living in a `ScheduledExecutorService`. |
-| Definition versioning | Planned | Resuming an old run against an edited definition matches recorded outputs by step name and does not detect that the shape changed. |
+| Definition versioning | Planned | A resume against a definition whose steps were renamed, removed or reordered since the run started is refused. Steps added after where the run stopped are allowed. What is missing is carrying an old run across the change: a version on the definition and a way to migrate recorded outputs. A step that kept its name while its types changed is still not detected. |
 | Dead letter queue | Planned | Runs that exhausted their retries are recorded in the log but not collected anywhere for triage. |
 | Automatic recovery scan | Planned | Nothing looks for interrupted runs and restarts them. Resuming is a call your application makes. |
 | Metrics exporters | Not planned | `WorkflowListener` is the hook. Wiring it to Micrometer or OpenTelemetry belongs in your application, not in a dependency-free library. |

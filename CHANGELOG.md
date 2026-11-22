@@ -6,6 +6,17 @@ All notable changes to Tandem are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **A resume against an edited definition is refused.** Recorded outputs are
+  matched by step name, so a run resumed after a step was renamed, removed or
+  moved would either repeat a step the log says already happened under its old
+  name or decode an output recorded for a different step. The steps a run has
+  events for must now be the definition's first steps, in order; otherwise
+  `run` and `resume` throw a `TandemException` naming both lists, before
+  anything is written. Steps added after where the run stopped still resume.
+  A step that kept its name while its types changed is not detected.
+
 ## [1.2.0] - 2026-08-23
 
 ### Added
