@@ -403,6 +403,72 @@ class RecoveryTest {
         assertEquals(store.eventsFor("run-1"), run.events());
     }
 
+    /**
+     * A definition edited between the crash and the resume. The charge step was
+     * renamed, so matching by name would find no recorded output for it and
+     * charge the card a second time. The resume is refused instead, before
+     * anything runs or is written.
+     */
+    @Test
+    void aResumeAgainstARenamedStepIsRefused() {
+        InMemoryStore store = new InMemoryStore();
+        AtomicInteger charges = new AtomicInteger();
+        assertThrows(
+                Crash.class,
+                () -> engine(store).run(checkout(charges, new AtomicInteger()), "order-9", "run-9"));
+        int eventsBefore = store.eventsFor("run-9").size();
+
+        Workflow<String, String> edited =
+                Workflow.<String>named("checkout")
+                        .input(Codec.ofString())
+                        .step(
+                                "capture",
+                                (String order, StepContext ctx) -> {
+                                    charges.incrementAndGet();
+                                    return order + "-charged";
+                                },
+                                Codec.ofString())
+                        .step("ship", (String charged, StepContext ctx) -> charged + "-shipped")
+                        .build();
+
+        TandemException refused =
+                assertThrows(TandemException.class, () -> engine(store).run(edited, "order-9", "run-9"));
+
+        assertTrue(refused.getMessage().contains("[charge, ship]"), refused.getMessage());
+        assertEquals(1, charges.get(), "the renamed step ran again");
+        assertEquals(eventsBefore, store.eventsFor("run-9").size(), "the refusal wrote to the log");
+    }
+
+    /** A step appended after the last one the run reached is not a shape change. */
+    @Test
+    void aStepAddedAfterWhereTheRunStoppedStillResumes() {
+        InMemoryStore store = new InMemoryStore();
+        AtomicInteger charges = new AtomicInteger();
+        AtomicInteger shipments = new AtomicInteger();
+        assertThrows(
+                Crash.class,
+                () -> engine(store).run(checkout(charges, shipments), "order-7", "run-7"));
+
+        Workflow<String, String> extended =
+                Workflow.<String>named("checkout")
+                        .input(Codec.ofString())
+                        .step(
+                                "charge",
+                                (String order, StepContext ctx) -> {
+                                    charges.incrementAndGet();
+                                    return order + "-charged";
+                                },
+                                Codec.ofString())
+                        .step("ship", (String charged, StepContext ctx) -> charged + "-shipped")
+                        .step("notify", (String shipped, StepContext ctx) -> shipped + "-notified")
+                        .build();
+
+        RunResult<String> resumed = engine(store).run(extended, "order-7", "run-7");
+
+        assertEquals("order-7-charged-shipped-notified", resumed.outputOrThrow());
+        assertEquals(1, charges.get(), "the recorded charge was repeated rather than replayed");
+    }
+
     private Workflow<String, String> checkout(AtomicInteger charges, AtomicInteger shipments) {
         return Workflow.<String>named("checkout")
                 .input(Codec.ofString())

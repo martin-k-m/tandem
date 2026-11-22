@@ -116,6 +116,9 @@ public final class WorkflowEngine implements AutoCloseable {
         if (history.ending() == EventType.RUN_SUCCEEDED) {
             throw completed(runId);
         }
+        if (resuming) {
+            requireSameShape(workflow, runId, history);
+        }
 
         emit(
                 collected,
@@ -292,6 +295,43 @@ public final class WorkflowEngine implements AutoCloseable {
         if (run.state() == RunState.COMPLETED) {
             throw completed(run.runId());
         }
+    }
+
+    /**
+     * Refuses a resume whose log does not fit the definition it is resumed against.
+     *
+     * <p>Steps run in a straight line, so the steps a run has events for must be
+     * the definition's first steps, in the same order. When they are not, the
+     * definition was edited after the run started: a step renamed, removed or
+     * moved. Recorded outputs are matched by step name, so carrying on would feed
+     * a value recorded under one shape into another, or repeat a step the log
+     * says already happened under its old name. Steps added after the last one
+     * the run reached still fit, since the run never got to them.
+     *
+     * <p>A step that kept its name while its types changed cannot be seen from
+     * the log, and is not caught here.
+     */
+    private static void requireSameShape(Workflow<?, ?> workflow, String runId, RunLog history) {
+        List<String> recorded = history.stepsInOrder();
+        List<String> defined = new ArrayList<>();
+        for (StepDefinition definition : workflow.steps()) {
+            defined.add(definition.name);
+        }
+        if (recorded.size() <= defined.size()
+                && defined.subList(0, recorded.size()).equals(recorded)) {
+            return;
+        }
+        throw new TandemException(
+                "run "
+                        + runId
+                        + " recorded steps "
+                        + recorded
+                        + " but "
+                        + workflow.name()
+                        + " now defines "
+                        + defined
+                        + "; the definition changed after the run started, so its recorded"
+                        + " outputs cannot be matched to steps");
     }
 
     private static TandemException completed(String runId) {
